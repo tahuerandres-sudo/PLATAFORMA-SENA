@@ -1,0 +1,324 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isInstructor() {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && getUserData().role == 'instructor';
+    }
+
+    function isFichaInstructor(fichaId) {
+      return isInstructor()
+        && fichaId != null
+        && fichaId != ''
+        && exists(/databases/$(database)/documents/fichas/$(fichaId))
+        && request.auth.uid in get(/databases/$(database)/documents/fichas/$(fichaId)).data.instructorIds;
+    }
+
+    // Regla de Colección: /users
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId)
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.role == 'apprentice';
+      allow update: if isOwner(userId) || isInstructor();
+      allow delete: if false;
+    }
+
+    // Catálogo Institucional y Estructura Académica (Solo lectura para aprendices, escritura instructor)
+    match /trainingCenters/{centerId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /trainingPrograms/{programId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /fichas/{fichaId} {
+      allow read: if isAuthenticated();
+      // El instructor solamente administra fichas asignadas (instructorIds) o al crearlas
+      allow create: if isInstructor() && (
+        !('instructorIds' in request.resource.data) ||
+        request.auth.uid in request.resource.data.instructorIds
+      );
+      allow update: if isInstructor() && (
+        !('instructorIds' in resource.data) ||
+        resource.data.instructorIds.size() == 0 ||
+        request.auth.uid in resource.data.instructorIds ||
+        request.auth.uid in request.resource.data.instructorIds
+      );
+      allow delete: if false;
+    }
+
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /fichaCourses/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /competencies/{id} {
+      allow read: if isAuthenticated();
+      // Distingue entre catálogo general del programa y competencia asociada a ficha
+      allow create: if isInstructor() && (
+        !('fichaId' in request.resource.data) ||
+        request.resource.data.fichaId == null ||
+        request.resource.data.fichaId == '' ||
+        (
+          exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
+        )
+      );
+      allow update: if isInstructor() && (
+        !('fichaId' in resource.data) ||
+        resource.data.fichaId == null ||
+        resource.data.fichaId == '' ||
+        (
+          exists(/databases/$(database)/documents/fichas/$(resource.data.fichaId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/fichas/$(resource.data.fichaId)).data.instructorIds
+        )
+      );
+      allow delete: if false;
+    }
+
+    match /learningOutcomes/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+      allow delete: if false;
+    }
+
+    // Matrículas (Enrollments)
+    match /enrollments/{enrollmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.apprenticeId == request.auth.uid ||
+        isInstructor()
+      );
+      allow update: if isInstructor() || (
+        isAuthenticated() && (
+          resource.data.userId == request.auth.uid ||
+          resource.data.apprenticeId == request.auth.uid
+        )
+      );
+      allow delete: if false;
+    }
+
+    // Actividades de Formación
+    // PROMPT 8.1: Validación estricta de autorización del instructor sobre la ficha asignada
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow create: if isInstructor()
+                    && ('fichaId' in request.resource.data)
+                    && exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId))
+                    && request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
+                    && (request.resource.data.createdBy == request.auth.uid || request.resource.data.instructorId == request.auth.uid);
+      allow update: if isInstructor()
+                    && (
+                      (
+                        'fichaId' in resource.data &&
+                        exists(/databases/$(database)/documents/fichas/$(resource.data.fichaId)) &&
+                        request.auth.uid in get(/databases/$(database)/documents/fichas/$(resource.data.fichaId)).data.instructorIds
+                      ) || (
+                        'fichaId' in request.resource.data &&
+                        exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)) &&
+                        request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
+                      )
+                    );
+      allow delete: if false;
+    }
+
+    // Entregas de Evidencias (Submissions)
+    // PROMPT 7 & 9.2: Control estricto de acceso RBAC
+    // El aprendiz solo puede leer y radicar sus propias entregas
+    // El instructor únicamente accede a entregas de fichas asignadas (instructorIds)
+    match /submissions/{submissionId} {
+      // Lectura autorizada:
+      // - El aprendiz solo puede leer sus propias entregas (userId o learnerId)
+      // - El instructor únicamente si la evidencia tiene fichaId válida y su UID pertenece a instructorIds de la ficha
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid ||
+        (
+          isInstructor()
+          && 'fichaId' in resource.data
+          && resource.data.fichaId != null
+          && resource.data.fichaId != ''
+          && exists(/databases/$(database)/documents/fichas/$(resource.data.fichaId))
+          && request.auth.uid in get(/databases/$(database)/documents/fichas/$(resource.data.fichaId)).data.instructorIds
+        )
+      );
+
+      // Radicación de entregas iniciales:
+      // - El aprendiz crea su entrega garantizando que su UID coincida y SIN auto-calificarse
+      // - No puede incluir campos de calificación ni aprobarse
+      allow create: if isAuthenticated() && (
+        (
+          (request.resource.data.userId == request.auth.uid || request.resource.data.learnerId == request.auth.uid)
+          && !('grade' in request.resource.data)
+          && !('gradedBy' in request.resource.data)
+          && !('gradedAt' in request.resource.data)
+          && request.resource.data.status != 'approved'
+          && request.resource.data.status != 'not_approved'
+        )
+        || (
+          isInstructor()
+          && 'fichaId' in request.resource.data
+          && request.resource.data.fichaId != null
+          && exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId))
+          && request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
+        )
+      );
+
+      // Actualización de entregas:
+      // - Instructor: Puede calificar si está asignado a la ficha
+      // - Aprendiz: Puede actualizar cuando requiere corrección (C) o está en borrador/pendiente:
+      //   * NUNCA puede auto-calificarse (no puede establecer grade a 'A' o 'N', solo omitir/limpiar)
+      //   * NUNCA puede auto-aprobarse (status solo puede ser 'submitted', 'under_review', 'pending')
+      //   * NUNCA puede modificar metadatos curriculares ni auditoría: gradedBy, gradedAt, instructorId, fichaId, activityId, courseId, programId, learningOutcomeId, userId, learnerId
+      allow update: if isAuthenticated() && (
+        (
+          isFichaInstructor(resource.data.fichaId) ||
+          (
+            'fichaId' in request.resource.data &&
+            isFichaInstructor(request.resource.data.fichaId)
+          )
+        )
+        || (
+          (resource.data.userId == request.auth.uid || resource.data.learnerId == request.auth.uid)
+          && resource.data.status != 'approved'
+          && request.resource.data.status in ['submitted', 'under_review', 'pending', 'correction_required']
+          && (!('grade' in request.resource.data) || request.resource.data.grade == null || request.resource.data.grade == resource.data.grade)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'gradedBy', 'gradedAt', 'instructorId', 'fichaId', 'activityId',
+            'courseId', 'programId', 'learningOutcomeId', 'userId', 'learnerId'
+          ])
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // Asistencia y Puntualidad (PROMPT 10: Control de acceso estricto por ficha asignada)
+    match /attendance/{attendanceId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId) ||
+        (isInstructor() && resource.data.instructorId == request.auth.uid)
+      );
+      allow create: if isFichaInstructor(request.resource.data.fichaId) ||
+                       (isInstructor() && (request.resource.data.instructorId == request.auth.uid || request.resource.data.recordedBy == request.auth.uid));
+      allow update: if (isFichaInstructor(resource.data.fichaId) ||
+                       (isInstructor() && (resource.data.instructorId == request.auth.uid || resource.data.recordedBy == request.auth.uid)))
+                       && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['learnerId', 'userId', 'fichaId', 'recordedBy', 'createdAt']);
+      allow delete: if false;
+    }
+
+    // Llamados de Atención (PROMPT 10: Aprendiz lee los suyos, instructor gestiona su ficha)
+    match /attentionCalls/{callId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId) ||
+        (isInstructor() && resource.data.createdBy == request.auth.uid)
+      );
+      allow create: if isFichaInstructor(request.resource.data.fichaId) ||
+                       (isInstructor() && request.resource.data.createdBy == request.auth.uid);
+      allow update: if isFichaInstructor(resource.data.fichaId) ||
+                       (isInstructor() && resource.data.createdBy == request.auth.uid);
+      allow delete: if false;
+    }
+
+    // Restricciones Académicas (PROMPT 10: Aprendiz lee las suyas, instructor gestiona su ficha)
+    match /academicRestrictions/{restrictionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId) ||
+        (isInstructor() && resource.data.createdBy == request.auth.uid)
+      );
+      allow create: if isFichaInstructor(request.resource.data.fichaId) ||
+                       (isInstructor() && request.resource.data.createdBy == request.auth.uid);
+      allow update: if isFichaInstructor(resource.data.fichaId) ||
+                       (isInstructor() && resource.data.createdBy == request.auth.uid);
+      allow delete: if false;
+    }
+
+    // Justificaciones (PROMPT 10: Aprendiz radica la suya en estado PENDIENTE, instructor revisa su ficha)
+    match /justifications/{justificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId)
+      );
+      allow create: if isAuthenticated() && (
+        (
+          (request.resource.data.userId == request.auth.uid || request.resource.data.learnerId == request.auth.uid)
+          && request.resource.data.status == 'PENDIENTE'
+        ) ||
+        isFichaInstructor(request.resource.data.fichaId)
+      );
+      allow update: if isFichaInstructor(resource.data.fichaId) ||
+                       (isInstructor() && resource.data.reviewedBy == request.auth.uid);
+      allow delete: if false;
+    }
+
+    // Seguimiento Pedagógico y Comportamental (PROMPT 10: Aprendiz lee el suyo, instructor gestiona su ficha)
+    match /learnerRecords/{recordId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId) ||
+        (isInstructor() && resource.data.createdBy == request.auth.uid)
+      );
+      allow create, update: if isFichaInstructor(request.resource.data.fichaId) ||
+                               (isInstructor() && (request.resource.data.createdBy == request.auth.uid || resource.data.createdBy == request.auth.uid));
+      allow delete: if false;
+    }
+
+    // Calificaciones históricas y retroalimentación
+    match /grades/{gradeId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /feedback/{feedbackId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    match /notifications/{notificationId} {
+      allow read, update: if isAuthenticated();
+      allow create: if isAuthenticated();
+    }
+
+    match /gamification/{apprenticeId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+  }
+}

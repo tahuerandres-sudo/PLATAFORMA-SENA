@@ -1,0 +1,414 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Perfil institucional del usuario de SENA Learning Hub",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "Correo electrónico institucional o personal" },
+        "displayName": { "type": "string", "description": "Nombre completo del usuario" },
+        "photoURL": { "type": "string", "description": "URL de la foto de perfil o avatar" },
+        "role": { "type": "string", "enum": ["instructor", "apprentice"], "description": "Rol en la plataforma" },
+        "documentNumber": { "type": "string", "description": "Número de cédula o documento de identidad" },
+        "phone": { "type": "string", "description": "Teléfono de contacto" },
+        "programId": { "type": "string", "description": "ID del programa de formación" },
+        "programName": { "type": "string", "description": "Nombre del programa de formación" },
+        "fichaId": { "type": "string", "description": "ID o código de la ficha asignada" },
+        "centerId": { "type": "string", "description": "ID del centro de formación SENA" },
+        "status": { "type": "string", "enum": ["active", "inactive", "pending", "blocked"], "description": "Estado de la cuenta" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de última actualización" }
+      },
+      "required": ["uid", "email", "displayName", "role", "status", "createdAt"]
+    },
+    "TrainingCenter": {
+      "title": "TrainingCenter",
+      "description": "Centro de formación SENA",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador único del centro de formación" },
+        "name": { "type": "string", "description": "Nombre oficial del centro (ej. Centro de Comercio y Servicios)" },
+        "code": { "type": "string", "description": "Código del centro (ej. CCS o 9218)" },
+        "city": { "type": "string", "description": "Ciudad sede (ej. Ibagué)" },
+        "department": { "type": "string", "description": "Departamento (ej. Tolima)" },
+        "address": { "type": "string", "description": "Dirección física del centro" },
+        "regional": { "type": "string", "description": "Regional SENA correspondiente" },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Estado operativo del centro" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de registro" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "name", "code", "city", "department", "status"]
+    },
+    "TrainingProgram": {
+      "title": "TrainingProgram",
+      "description": "Programa de formación académica SENA",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador del programa" },
+        "name": { "type": "string", "description": "Nombre del programa (ej. Gestión Contable y de Información Financiera)" },
+        "code": { "type": "string", "description": "Código del programa (ej. 228106)" },
+        "level": { "type": "string", "enum": ["tecnico", "tecnologo", "especializacion", "operario", "curso_corto"], "description": "Nivel académico del programa" },
+        "centerId": { "type": "string", "description": "ID del centro de formación que oferta el programa" },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Estado del programa" },
+        "description": { "type": "string", "description": "Descripción y perfil ocupacional" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "name", "code", "level", "centerId", "status"]
+    },
+    "Ficha": {
+      "title": "Ficha",
+      "description": "Ficha o grupo de formación académica",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador único de la ficha" },
+        "number": { "type": "string", "description": "Número de ficha SENA (ej. 3409626)" },
+        "fichaNumber": { "type": "string", "description": "Alias para número de ficha SENA" },
+        "name": { "type": "string", "description": "Nombre descriptivo de la ficha" },
+        "programId": { "type": "string", "description": "ID del programa de formación" },
+        "programName": { "type": "string", "description": "Nombre del programa de formación asociado" },
+        "centerId": { "type": "string", "description": "ID del centro de formación" },
+        "instructorIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Lista de identificadores de instructores asignados a la ficha"
+        },
+        "startDate": { "type": "string", "format": "date-time", "description": "Fecha de inicio" },
+        "endDate": { "type": "string", "format": "date-time", "description": "Fecha de finalización" },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived", "completed"], "description": "Estado de la ficha" },
+        "shift": { "type": "string", "enum": ["morning", "afternoon", "evening"], "description": "Jornada formativa" },
+        "stage": { "type": "string", "enum": ["induction", "lectiva", "productive", "completed"], "description": "Etapa formativa" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "number", "programId", "centerId", "shift", "stage", "status"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Curso o asignatura transversal/técnica",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador único del curso" },
+        "name": { "type": "string", "description": "Nombre del curso (ej. Inglés – Bilingüismo Laboral)" },
+        "code": { "type": "string", "description": "Código del curso (ej. 240202501-ING)" },
+        "description": { "type": "string", "description": "Descripción de contenidos" },
+        "type": { "type": "string", "enum": ["transversal", "technical", "bilingualism", "other"], "description": "Tipo de curso" },
+        "instructorIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Lista de instructores asignados al curso"
+        },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Estado del curso" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "name", "code", "type", "status"]
+    },
+    "FichaCourse": {
+      "title": "FichaCourse",
+      "description": "Asignación intermedia entre Ficha, Curso e Instructores",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la asignación" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "courseId": { "type": "string", "description": "ID del curso" },
+        "instructorIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Instructores asignados al curso en esta ficha específica"
+        },
+        "startDate": { "type": "string", "format": "date-time", "description": "Fecha de inicio" },
+        "endDate": { "type": "string", "format": "date-time", "description": "Fecha de cierre" },
+        "status": { "type": "string", "enum": ["active", "inactive", "completed"], "description": "Estado de la asignación" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "fichaId", "courseId", "status"]
+    },
+    "Competency": {
+      "title": "Competency",
+      "description": "Competencia laboral o transversal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la competencia" },
+        "name": { "type": "string", "description": "Nombre de la competencia" },
+        "code": { "type": "string", "description": "Código de la norma laboral (ej. 240202501)" },
+        "description": { "type": "string", "description": "Descripción de la competencia" },
+        "programId": { "type": "string", "description": "ID del programa de formación" },
+        "courseId": { "type": "string", "description": "ID del curso vinculado" },
+        "fichaId": { "type": "string", "description": "ID de la ficha vinculada (opcional)" },
+        "type": { "type": "string", "enum": ["transversal", "technical", "basic", "other"], "description": "Tipo de competencia" },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Estado de la competencia" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "name", "code", "type", "status"]
+    },
+    "LearningOutcome": {
+      "title": "LearningOutcome",
+      "description": "Resultado de Aprendizaje del Programa (RAP)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del resultado de aprendizaje" },
+        "competencyId": { "type": "string", "description": "ID de la competencia padre" },
+        "programId": { "type": "string", "description": "ID del programa de formación" },
+        "courseId": { "type": "string", "description": "ID del curso correspondiente" },
+        "code": { "type": "string", "description": "Código del RAP (ej. RAP-240202501-01)" },
+        "description": { "type": "string", "description": "Descripción pedagógica observable" },
+        "sequence": { "type": "number", "description": "Orden secuencial de impartición (1, 2, 3...)" },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Estado del RAP" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "competencyId", "code", "description", "sequence", "status"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Matrícula académica del aprendiz en una ficha y programa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID único de la matrícula" },
+        "userId": { "type": "string", "description": "UID de Firebase Auth del aprendiz" },
+        "learnerId": { "type": "string", "description": "Identificador del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha vinculada" },
+        "programId": { "type": "string", "description": "ID del programa de formación" },
+        "centerId": { "type": "string", "description": "ID del centro de formación" },
+        "courseId": { "type": "string", "description": "ID del curso específico (opcional)" },
+        "status": { "type": "string", "enum": ["active", "inactive", "completed", "withdrawn", "suspended"], "description": "Estado de la matrícula" },
+        "enrollmentDate": { "type": "string", "format": "date-time", "description": "Fecha de formalización de matrícula" },
+        "completionDate": { "type": "string", "format": "date-time", "description": "Fecha de culminación o retiro" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "userId", "fichaId", "programId", "centerId", "status", "enrollmentDate"]
+    },
+    "EvidenceActivity": {
+      "title": "EvidenceActivity",
+      "description": "Actividad de formación que solicita entrega de evidencias al aprendiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la actividad" },
+        "title": { "type": "string", "description": "Título de la actividad (ej. Family Tree Presentation)" },
+        "description": { "type": "string", "description": "Descripción general" },
+        "courseId": { "type": "string", "description": "ID del curso" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "competencyId": { "type": "string", "description": "ID de la competencia" },
+        "learningOutcomeId": { "type": "string", "description": "ID del RAP evaluado" },
+        "createdBy": { "type": "string", "description": "UID del instructor autor" },
+        "status": { "type": "string", "enum": ["draft", "published", "closed", "archived"], "description": "Estado de publicación" },
+        "publishedAt": { "type": "string", "format": "date-time", "description": "Fecha de publicación" },
+        "dueDate": { "type": "string", "format": "date-time", "description": "Fecha límite de entrega" },
+        "points": { "type": "number", "description": "Puntos de evaluación (ej. 100)" },
+        "instructions": { "type": "string", "description": "Instrucciones detalladas de entrega" },
+        "submissionType": {
+          "type": "string",
+          "enum": ["canva_link", "youtube_link", "pdf", "image", "video", "document", "audio", "external_link", "text", "multiple_files"],
+          "description": "Tipo de evidencia requerida"
+        },
+        "maxFileSize": { "type": "number", "description": "Tamaño máximo en MB" },
+        "requiresUrl": { "type": "boolean", "description": "Requiere enlace web" },
+        "requiresFile": { "type": "boolean", "description": "Requiere archivo digital" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "title", "courseId", "fichaId", "competencyId", "learningOutcomeId", "submissionType", "status"]
+    },
+    "AcademicSubmission": {
+      "title": "AcademicSubmission",
+      "description": "Entrega de evidencia realizada por un aprendiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la entrega" },
+        "activityId": { "type": "string", "description": "ID de la actividad" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "courseId": { "type": "string", "description": "ID del curso" },
+        "submittedAt": { "type": "string", "format": "date-time", "description": "Fecha y hora de radicación" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "submitted", "under_review", "approved", "not_approved", "correction_required", "late", "blocked"],
+          "description": "Estado evaluativo de la entrega"
+        },
+        "submissionType": { "type": "string", "description": "Tipo de evidencia entregada" },
+        "fileUrl": { "type": "string", "description": "URL del archivo" },
+        "externalUrl": { "type": "string", "description": "URL externa (Canva, YouTube, etc.)" },
+        "fileName": { "type": "string", "description": "Nombre original del archivo" },
+        "mimeType": { "type": "string", "description": "Tipo MIME" },
+        "feedback": { "type": "string", "description": "Retroalimentación cualitativa del instructor" },
+        "grade": { "type": "string", "description": "Calificación SENA: A (Aprobado), N (No Aprobado), C (Corregir)" },
+        "gradedBy": { "type": "string", "description": "UID del instructor evaluador" },
+        "gradedAt": { "type": "string", "format": "date-time", "description": "Fecha de evaluación" },
+        "resubmissionCount": { "type": "number", "description": "Número de reintentos" },
+        "submissionHistory": { "type": "array", "description": "Historial de versiones y correcciones de la evidencia" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "activityId", "userId", "fichaId", "courseId", "submittedAt", "status", "submissionType"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Registro diario de asistencia y puntualidad",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del registro de asistencia" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "courseId": { "type": "string", "description": "ID del curso" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "date": { "type": "string", "description": "Fecha de la sesión (YYYY-MM-DD)" },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "excused"], "description": "Estado de asistencia" },
+        "arrivalTime": { "type": "string", "description": "Hora de ingreso (HH:mm)" },
+        "notes": { "type": "string", "description": "Observaciones del instructor" },
+        "recordedBy": { "type": "string", "description": "UID del instructor que toma lista" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "fichaId", "courseId", "userId", "date", "status", "recordedBy"]
+    },
+    "AttentionCall": {
+      "title": "AttentionCall",
+      "description": "Llamado de atención pedagógico o disciplinario",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador del llamado" },
+        "userId": { "type": "string", "description": "UID del aprendiz objeto de llamado" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "courseId": { "type": "string", "description": "ID del curso (opcional)" },
+        "type": { "type": "string", "enum": ["absence", "late_arrival", "missing_evidence", "academic", "behavioral", "other"], "description": "Tipo de causal" },
+        "reason": { "type": "string", "description": "Motivo sintetizado" },
+        "description": { "type": "string", "description": "Descripción pormenorizada de los hechos" },
+        "date": { "type": "string", "description": "Fecha de emisión" },
+        "createdBy": { "type": "string", "description": "UID del instructor emisor" },
+        "status": { "type": "string", "enum": ["draft", "issued", "pending_signature", "signed", "reviewed", "closed"], "description": "Estado del debido proceso" },
+        "documentUrl": { "type": "string", "description": "URL del PDF oficial generado" },
+        "signedDocumentUrl": { "type": "string", "description": "URL del PDF firmado por el aprendiz" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "userId", "fichaId", "type", "reason", "description", "date", "createdBy", "status"]
+    },
+    "AcademicRestriction": {
+      "title": "AcademicRestriction",
+      "description": "Restricción académica temporal sin bloqueo de acceso a la cuenta",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la restricción" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "type": { "type": "string", "enum": ["evidence_submission", "academic_activity", "attendance", "other"], "description": "Funcionalidad restringida" },
+        "reason": { "type": "string", "description": "Causal de la restricción" },
+        "relatedAttentionCallId": { "type": "string", "description": "ID del llamado de atención asociado" },
+        "status": { "type": "string", "enum": ["active", "pending_review", "resolved"], "description": "Estado de la restricción" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de aplicación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de modificación" }
+      },
+      "required": ["id", "userId", "fichaId", "type", "reason", "status"]
+    },
+    "Justification": {
+      "title": "Justification",
+      "description": "Justificación radicada por el aprendiz por inasistencia o entrega tardía",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la justificación" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "attendanceId": { "type": "string", "description": "ID de la inasistencia (opcional)" },
+        "attentionCallId": { "type": "string", "description": "ID del llamado de atención (opcional)" },
+        "reason": { "type": "string", "description": "Motivo de la justificación" },
+        "description": { "type": "string", "description": "Explicación de la causal" },
+        "evidenceUrl": { "type": "string", "description": "Soporte médico o laboral" },
+        "submittedAt": { "type": "string", "format": "date-time", "description": "Fecha de radicación" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "requires_correction"], "description": "Estado de revisión" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "userId", "fichaId", "reason", "description", "submittedAt", "status"]
+    },
+    "LearnerRecord": {
+      "title": "LearnerRecord",
+      "description": "Seguimiento pedagógico y comportamental del aprendiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la anotación" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "type": { "type": "string", "enum": ["academic", "behavioral"], "description": "Tipo de observación" },
+        "category": { "type": "string", "description": "Categoría predeterminada (low_performance, missing_evidence, punctuality, teamwork, etc.)" },
+        "subcategory": { "type": "string", "description": "Subcategoría complementaria" },
+        "description": { "type": "string", "description": "Observación detallada y acuerdos" },
+        "createdBy": { "type": "string", "description": "UID del instructor" },
+        "date": { "type": "string", "description": "Fecha de registro" },
+        "status": { "type": "string", "enum": ["active", "resolved", "archived"], "description": "Estado del seguimiento" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "userId", "fichaId", "type", "category", "description", "createdBy", "date", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Perfiles de usuarios (aprendices e instructores) indexados por UID de Firebase Authentication"
+    },
+    "/trainingCenters/{centerId}": {
+      "schema": { "$ref": "#/entities/TrainingCenter" },
+      "description": "Centros de formación SENA (ej. Centro de Comercio y Servicios)"
+    },
+    "/trainingPrograms/{programId}": {
+      "schema": { "$ref": "#/entities/TrainingProgram" },
+      "description": "Programas de formación académica vinculados a centros"
+    },
+    "/fichas/{fichaId}": {
+      "schema": { "$ref": "#/entities/Ficha" },
+      "description": "Fichas o grupos de formación (ej. Ficha 3409626)"
+    },
+    "/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/Course" },
+      "description": "Cursos o competencias transversales (ej. Inglés – Bilingüismo Laboral)"
+    },
+    "/fichaCourses/{fichaCourseId}": {
+      "schema": { "$ref": "#/entities/FichaCourse" },
+      "description": "Relación intermedia entre Fichas y Cursos asociados"
+    },
+    "/competencies/{competencyId}": {
+      "schema": { "$ref": "#/entities/Competency" },
+      "description": "Normas de competencia laboral asociadas a cursos y fichas"
+    },
+    "/learningOutcomes/{learningOutcomeId}": {
+      "schema": { "$ref": "#/entities/LearningOutcome" },
+      "description": "Resultados de Aprendizaje (RAPs) vinculados a competencias"
+    },
+    "/enrollments/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/Enrollment" },
+      "description": "Matrículas que vinculan formalmente al aprendiz con fichas y programas"
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/EvidenceActivity" },
+      "description": "Actividades y evidencias pedagógicas con restricción de tipo de entrega"
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/AcademicSubmission" },
+      "description": "Entregas de evidencias y calificaciones A/N/C"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Control diario de asistencia y puntualidad por ficha"
+    },
+    "/attentionCalls/{callId}": {
+      "schema": { "$ref": "#/entities/AttentionCall" },
+      "description": "Llamados de atención emitidos a aprendices"
+    },
+    "/academicRestrictions/{restrictionId}": {
+      "schema": { "$ref": "#/entities/AcademicRestriction" },
+      "description": "Restricciones académicas temporales que no bloquean login en Firebase Auth"
+    },
+    "/justifications/{justificationId}": {
+      "schema": { "$ref": "#/entities/Justification" },
+      "description": "Justificaciones radicadas por aprendices"
+    },
+    "/learnerRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/LearnerRecord" },
+      "description": "Seguimiento pedagógico y comportamental cualitativo"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "SENA Learning Hub",
+  "description": "Plataforma educativa web progresiva (PWA) inspirada en Google Classroom para la formación de aprendices del SENA y bilingüismo en inglés.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
