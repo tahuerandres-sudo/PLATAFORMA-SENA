@@ -26,6 +26,8 @@ import {
 import { trackingService } from '../academic/trackingService';
 import { fichaService } from '../academic/fichaService';
 import { normalizeEvaluationStatus } from '../../utils/evaluationUtils';
+import { notificationService } from '../academic/notificationService';
+import { gamificationService } from '../academic/gamificationService';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.SUBMISSIONS;
 
@@ -114,6 +116,28 @@ export const submissionService = {
         err
       );
     }
+
+    // PROMPT 14 - Evento Gamificación A: Entrega inicial de evidencia (+10 XP)
+    gamificationService
+      .onEvidenceSubmitted({
+        submissionId: fullSubmission.id,
+        userId: fullSubmission.learnerId || fullSubmission.userId,
+        activityTitle: fullSubmission.activityTitle,
+      })
+      .catch((e) => console.warn('[submissionService] Error despachando evento gamificación:', e));
+
+    // PROMPT 16 - Evento Evidencias A: Notificar al instructor sobre la nueva entrega
+    notificationService
+      .notifyEvidenceSubmitted({
+        submissionId: fullSubmission.id,
+        activityId: fullSubmission.activityId,
+        activityTitle: fullSubmission.activityTitle,
+        learnerId: fullSubmission.learnerId || fullSubmission.userId,
+        learnerName: fullSubmission.learnerName,
+        fichaId: fullSubmission.fichaId,
+        instructorId: fullSubmission.instructorId,
+      })
+      .catch((e) => console.warn('[submissionService] Error notificando entrega a instructor:', e));
 
     return fullSubmission;
   },
@@ -328,6 +352,29 @@ export const submissionService = {
   },
 
   /**
+   * Obtiene una entrega específica por su ID
+   */
+  async getSubmissionById(submissionId: string): Promise<AcademicSubmission | null> {
+    const memoryFound = inMemorySubmissions.find((s) => s.id === submissionId);
+    if (memoryFound) return memoryFound;
+
+    try {
+      const snap = await getDoc(doc(db, COLLECTION, submissionId));
+      if (snap.exists()) {
+        const item = snap.data() as AcademicSubmission;
+        if (!inMemorySubmissions.some((s) => s.id === item.id)) {
+          inMemorySubmissions = [item, ...inMemorySubmissions];
+        }
+        return item;
+      }
+    } catch (err) {
+      console.warn(`[submissionService] Error consultando entrega ${submissionId}:`, err);
+    }
+
+    return null;
+  },
+
+  /**
    * Califica una entrega con dictamen oficial SENA (A = Aprobado, N = No aprobado, C = Corregir)
    * Registra gradedBy, instructorId, gradedAt, status, grade ('A' | 'N' | 'C') y retroalimentación
    */
@@ -338,8 +385,23 @@ export const submissionService = {
     feedback?: string;
     instructorId: string;
     instructorName?: string;
+    rubricEvaluationId?: string;
+    rubricScore?: number;
+    rubricMaxScore?: number;
+    rubricPercentage?: number;
   }): Promise<AcademicSubmission | null> {
-    const { submissionId, gradeCode, score, feedback, instructorId, instructorName } = payload;
+    const {
+      submissionId,
+      gradeCode,
+      score,
+      feedback,
+      instructorId,
+      instructorName,
+      rubricEvaluationId,
+      rubricScore,
+      rubricMaxScore,
+      rubricPercentage,
+    } = payload;
     const now = new Date().toISOString();
     const status: SubmissionAcademicStatus =
       gradeCode === 'A' ? 'approved' : gradeCode === 'N' ? 'not_approved' : 'correction_required';
@@ -352,6 +414,46 @@ export const submissionService = {
     // Actualizar en memoria
     inMemorySubmissions = inMemorySubmissions.map((s) => {
       if (s.id === submissionId) {
+        const currentHist = s.submissionHistory || [];
+        let updatedHistory = [...currentHist];
+        if (updatedHistory.length > 0) {
+          const lastIdx = updatedHistory.length - 1;
+          updatedHistory[lastIdx] = {
+            ...updatedHistory[lastIdx],
+            status,
+            grade: gradeCode,
+            feedback: feedback !== undefined ? feedback : updatedHistory[lastIdx].feedback,
+            gradedBy: gradedByName,
+            gradedAt: now,
+            rubricEvaluationId: rubricEvaluationId || updatedHistory[lastIdx].rubricEvaluationId,
+            rubricScore: rubricScore !== undefined ? rubricScore : updatedHistory[lastIdx].rubricScore,
+            rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : updatedHistory[lastIdx].rubricMaxScore,
+            rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : updatedHistory[lastIdx].rubricPercentage,
+          };
+        } else {
+          updatedHistory = [
+            {
+              version: s.version || 1,
+              submittedAt: s.submittedAt || now,
+              driveFileId: s.driveFileId,
+              driveUrl: s.driveUrl,
+              driveFileUrl: s.driveFileUrl,
+              fileName: s.fileName,
+              externalUrl: s.externalUrl,
+              textContent: s.textContent,
+              status,
+              grade: gradeCode,
+              feedback: feedback || '',
+              gradedBy: gradedByName,
+              gradedAt: now,
+              rubricEvaluationId,
+              rubricScore,
+              rubricMaxScore,
+              rubricPercentage,
+            },
+          ];
+        }
+
         updatedSubmission = {
           ...s,
           status,
@@ -360,6 +462,11 @@ export const submissionService = {
           gradedBy: gradedByName,
           instructorId,
           gradedAt: now,
+          rubricEvaluationId: rubricEvaluationId || s.rubricEvaluationId,
+          rubricScore: rubricScore !== undefined ? rubricScore : s.rubricScore,
+          rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : s.rubricMaxScore,
+          rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : s.rubricPercentage,
+          submissionHistory: updatedHistory,
           updatedAt: now,
         };
         return updatedSubmission;
@@ -370,21 +477,60 @@ export const submissionService = {
     // Actualizar en Cloud Firestore (/submissions/{submissionId})
     try {
       const subRef = doc(db, COLLECTION, submissionId);
-      await setDoc(
-        subRef,
-        {
-          status,
-          grade: gradeCode,
-          feedback: feedback !== undefined ? feedback : '',
-          gradedBy: gradedByName,
-          instructorId,
-          gradedAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
+      const updateData: Record<string, any> = {
+        status,
+        grade: gradeCode,
+        feedback: feedback !== undefined ? feedback : '',
+        gradedBy: gradedByName,
+        instructorId,
+        gradedAt: now,
+        updatedAt: now,
+      };
+
+      if (rubricEvaluationId) updateData.rubricEvaluationId = rubricEvaluationId;
+      if (rubricScore !== undefined) updateData.rubricScore = rubricScore;
+      if (rubricMaxScore !== undefined) updateData.rubricMaxScore = rubricMaxScore;
+      if (rubricPercentage !== undefined) updateData.rubricPercentage = rubricPercentage;
+      if (updatedSubmission && (updatedSubmission as AcademicSubmission).submissionHistory) {
+        updateData.submissionHistory = (updatedSubmission as AcademicSubmission).submissionHistory;
+      }
+
+      await setDoc(subRef, updateData, { merge: true });
     } catch (err) {
       console.warn('[submissionService] Aviso guardando calificación en Firestore:', err);
+    }
+
+    // PROMPT 13 - Evento C: Notificar al aprendiz el dictamen oficial de su evidencia
+    if (updatedSubmission) {
+      const sub = updatedSubmission as AcademicSubmission;
+      const targetLearnerId = sub.learnerId || sub.userId;
+      if (targetLearnerId) {
+        notificationService.notifyEvidenceGraded({
+          submissionId: sub.id,
+          activityId: sub.activityId,
+          activityTitle: sub.activityTitle,
+          learnerId: targetLearnerId,
+          gradeCode,
+          feedback,
+          version: sub.version || 1,
+        }).catch((e) => console.warn('[submissionService] Error despachando notificación de calificación:', e));
+
+        // PROMPT 14 - Evento Gamificación D: Si es Aprobada (A), otorgar puntos (+20 XP)
+        if (gradeCode === 'A') {
+          gamificationService.onEvidenceApproved({
+            submissionId: sub.id,
+            userId: targetLearnerId,
+            version: sub.version || 1,
+            activityTitle: sub.activityTitle,
+          }).catch((e) => console.warn('[submissionService] Error en gamificación Aprobada:', e));
+
+          gamificationService.onActivityCompleted({
+            activityId: sub.activityId,
+            userId: targetLearnerId,
+            activityTitle: sub.activityTitle,
+          }).catch((e) => console.warn('[submissionService] Error en gamificación Actividad Completada:', e));
+        }
+      }
     }
 
     return updatedSubmission;
@@ -425,7 +571,7 @@ export const submissionService = {
       return s;
     });
 
-    // 2. Actualizar en Cloud Firestore en paralelo
+    // 2. Actualizar en Cloud Firestore en paralelo y despachar notificaciones
     const updatePromises = submissionIds.map(async (id) => {
       try {
         const subRef = doc(db, COLLECTION, id);
@@ -442,6 +588,37 @@ export const submissionService = {
           },
           { merge: true }
         );
+
+        const sub = inMemorySubmissions.find((s) => s.id === id);
+        if (sub) {
+          const targetLearnerId = sub.learnerId || sub.userId;
+          if (targetLearnerId) {
+            notificationService.notifyEvidenceGraded({
+              submissionId: sub.id,
+              activityId: sub.activityId,
+              activityTitle: sub.activityTitle,
+              learnerId: targetLearnerId,
+              gradeCode,
+              feedback,
+              version: sub.version || 1,
+            }).catch((e) => console.warn('[submissionService] Error despachando notificación masiva:', e));
+
+            if (gradeCode === 'A') {
+              gamificationService.onEvidenceApproved({
+                submissionId: sub.id,
+                userId: targetLearnerId,
+                version: sub.version || 1,
+                activityTitle: sub.activityTitle,
+              }).catch((e) => console.warn('[submissionService] Error en gamificación Aprobada:', e));
+
+              gamificationService.onActivityCompleted({
+                activityId: sub.activityId,
+                userId: targetLearnerId,
+                activityTitle: sub.activityTitle,
+              }).catch((e) => console.warn('[submissionService] Error en gamificación Actividad Completada:', e));
+            }
+          }
+        }
       } catch (err) {
         console.warn(`[submissionService] Error en calificación masiva de ${id}:`, err);
       }
@@ -552,6 +729,32 @@ export const submissionService = {
       await setDoc(subRef, firestorePayload, { merge: true });
     } catch (err) {
       console.warn('[submissionService] Aviso al actualizar corrección en Firestore:', err);
+    }
+
+    // PROMPT 13 - Evento D: Notificar al instructor que hay una nueva versión corregida radicada
+    if (updatedSubmission.instructorId) {
+      notificationService.notifyResubmission({
+        submissionId: updatedSubmission.id,
+        activityId: updatedSubmission.activityId,
+        activityTitle: updatedSubmission.activityTitle,
+        instructorId: updatedSubmission.instructorId,
+        learnerName: updatedSubmission.learnerName,
+        newVersion: updatedSubmission.version || 1,
+        fichaId: updatedSubmission.fichaId,
+      }).catch((e) => console.warn('[submissionService] Error despachando notificación de reenvío:', e));
+    }
+
+    // PROMPT 14 - Evento Gamificación C: Corrección completada (+10 XP)
+    const targetLearnerId = updatedSubmission.learnerId || updatedSubmission.userId;
+    if (targetLearnerId) {
+      gamificationService
+        .onCorrectionCompleted({
+          submissionId: updatedSubmission.id,
+          userId: targetLearnerId,
+          version: updatedSubmission.version || 1,
+          activityTitle: updatedSubmission.activityTitle,
+        })
+        .catch((e) => console.warn('[submissionService] Error en gamificación Corrección:', e));
     }
 
     return updatedSubmission;

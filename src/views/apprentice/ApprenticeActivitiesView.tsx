@@ -21,6 +21,7 @@ import {
   Award,
   BookOpen,
   ShieldAlert,
+  Sliders,
 } from 'lucide-react';
 import {
   EvidenceActivity,
@@ -28,8 +29,10 @@ import {
   Enrollment,
   Course,
   LearningOutcome,
+  Rubric,
 } from '../../types/academic';
 import { activityService } from '../../services/academic/activityService';
+import { rubricService } from '../../services/academic/rubricService';
 import { submissionService } from '../../services/submissions/submissionService';
 import { trackingService } from '../../services/academic/trackingService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
@@ -39,6 +42,7 @@ import { getEvidenceTypeConfig } from '../../config/fileLimits';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
 import { SubmissionForm } from '../../components/evidence/SubmissionForm';
+import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
 import { DriveConnectionStatus } from '../../components/evidence/DriveConnectionStatus';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -51,6 +55,9 @@ export const ApprenticeActivitiesView: React.FC = () => {
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [learningOutcomes, setLearningOutcomes] = useState<LearningOutcome[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [rubricsMap, setRubricsMap] = useState<Record<string, Rubric>>({});
+  const [selectedRubric, setSelectedRubric] = useState<Rubric | null>(null);
+  const [rubricModalOpen, setRubricModalOpen] = useState(false);
   const [activeBlock, setActiveBlock] = useState<{ blocked: boolean; reason?: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -89,6 +96,26 @@ export const ApprenticeActivitiesView: React.FC = () => {
       setActivities(visibleActivities);
       setSubmissions(subRes.data || []);
       setActiveBlock(blockRes.blocked ? blockRes : null);
+
+      // Cargar rúbricas publicadas de las actividades (Prompt 19)
+      const rubrics: Record<string, Rubric> = {};
+      for (const act of visibleActivities) {
+        try {
+          let rub: Rubric | null = null;
+          if (act.rubricId) {
+            rub = await rubricService.getRubric(act.rubricId);
+          }
+          if (!rub) {
+            rub = await rubricService.getRubricByActivity(act.id);
+          }
+          if (rub && rub.isPublished) {
+            rubrics[act.id] = rub;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+      setRubricsMap(rubrics);
     } catch (err) {
       console.error('[ApprenticeActivitiesView] Error cargando datos:', err);
     } finally {
@@ -345,6 +372,28 @@ export const ApprenticeActivitiesView: React.FC = () => {
                     <span className="font-bold text-[#2E8500] text-xs">Máx {act.points} pts</span>
                   </div>
 
+                  {/* Rúbrica Pedagógica si está publicada (Prompt 19) */}
+                  {rubricsMap[act.id] && (
+                    <div className="p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-lg flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <Sliders className="w-3.5 h-3.5 text-[#39A900] shrink-0" />
+                        <span className="font-semibold text-emerald-950 truncate">
+                          Rúbrica: {rubricsMap[act.id].title} ({rubricsMap[act.id].criteria?.length || 0} criterios · 100%)
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedRubric(rubricsMap[act.id]);
+                          setRubricModalOpen(true);
+                        }}
+                        className="px-2.5 py-1 text-[11px] font-bold text-[#2E8500] hover:text-white bg-white hover:bg-[#39A900] border border-emerald-300 rounded-md transition-colors cursor-pointer shrink-0"
+                      >
+                        Ver Criterios
+                      </button>
+                    </div>
+                  )}
+
                   {/* Calificación y Retroalimentación del Instructor si ya está evaluada */}
                   {sub && sub.status === 'approved' && (
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs space-y-1">
@@ -419,6 +468,19 @@ export const ApprenticeActivitiesView: React.FC = () => {
             }}
           />
         </Modal>
+      )}
+
+      {/* Modal: Consulta Detallada de Rúbrica Pedagógica (Prompt 19) */}
+      {rubricModalOpen && selectedRubric && (
+        <RubricDetailModal
+          isOpen={rubricModalOpen}
+          onClose={() => {
+            setRubricModalOpen(false);
+            setSelectedRubric(null);
+          }}
+          rubric={selectedRubric}
+          userRole="apprentice"
+        />
       )}
     </div>
   );

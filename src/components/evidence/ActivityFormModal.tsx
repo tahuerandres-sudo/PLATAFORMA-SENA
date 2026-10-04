@@ -20,6 +20,7 @@ import {
   AlertCircle,
   RefreshCw,
   FolderArchive,
+  Sliders,
 } from 'lucide-react';
 import {
   EvidenceActivity,
@@ -30,6 +31,7 @@ import {
   Course,
   Competency,
   LearningOutcome,
+  Rubric,
 } from '../../types/academic';
 import {
   getTrainingPrograms,
@@ -40,8 +42,10 @@ import {
 import { competencyService } from '../../services/academic/competencyService';
 import { learningOutcomeService } from '../../services/academic/learningOutcomeService';
 import { activityService } from '../../services/academic/activityService';
+import { rubricService } from '../../services/academic/rubricService';
 import { EVIDENCE_TYPE_CONFIGS, getEvidenceTypeConfig } from '../../config/fileLimits';
 import { Modal } from '../ui/Modal';
+import { RubricFormModal } from '../rubrics/RubricFormModal';
 import { useAuth } from '../../hooks/useAuth';
 
 interface ActivityFormModalProps {
@@ -96,8 +100,31 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
   // 12. Estado
   const [status, setStatus] = useState<ActivityStatus>('published');
 
+  // Integración con Rúbricas Pedagógicas (Prompt 19 - Requisito 18)
+  const [useRubric, setUseRubric] = useState<boolean>(Boolean(initialActivity?.rubricId));
+  const [selectedRubricId, setSelectedRubricId] = useState<string>(initialActivity?.rubricId || '');
+  const [availableRubrics, setAvailableRubrics] = useState<Rubric[]>([]);
+  const [createRubricModalOpen, setCreateRubricModalOpen] = useState(false);
+
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Cargar rúbricas disponibles para la ficha seleccionada
+  useEffect(() => {
+    async function loadFichaRubrics() {
+      if (!fichaId) {
+        setAvailableRubrics([]);
+        return;
+      }
+      try {
+        const list = await rubricService.getRubricsByFicha(fichaId);
+        setAvailableRubrics(list);
+      } catch (err) {
+        console.warn('[ActivityFormModal] Error cargando rúbricas de la ficha:', err);
+      }
+    }
+    loadFichaRubrics();
+  }, [fichaId]);
 
   // Carga inicial de datos de catálogo
   useEffect(() => {
@@ -292,6 +319,11 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       return;
     }
 
+    if (useRubric && !selectedRubricId) {
+      setErrorMessage('Has activado la evaluación por rúbrica. Por favor selecciona una rúbrica pedagógica de la lista o desmarca la casilla.');
+      return;
+    }
+
     if (!instructorUid) {
       setErrorMessage('No se identificó un instructor autenticado para registrar la autoría.');
       return;
@@ -325,6 +357,10 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       dueDate: `${dueDate}T23:59:59Z`,
       endDate: `${dueDate}T23:59:59Z`,
       points: 100,
+      rubricId: useRubric && selectedRubricId ? selectedRubricId : null,
+      rubricTitle: useRubric
+        ? availableRubrics.find((r) => r.id === selectedRubricId)?.title
+        : undefined,
       submissionType,
       allowedExtensions: currentTypeConfig.allowedExtensions,
       allowedMimeTypes: currentTypeConfig.allowedMimeTypes,
@@ -349,7 +385,8 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
   };
 
   return (
-    <Modal
+    <>
+      <Modal
       isOpen={isOpen}
       onClose={onClose}
       title={initialActivity ? 'Editar Actividad de Aprendizaje' : 'Crear Nueva Actividad de Aprendizaje'}
@@ -613,6 +650,86 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
             </div>
           </div>
 
+          {/* SECCIÓN: RÚBRICA PEDAGÓGICA DE EVALUACIÓN (PROMPT 19 - Requisito 18) */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="inline-flex items-center gap-2 cursor-pointer font-bold text-slate-800 text-xs">
+                <input
+                  type="checkbox"
+                  checked={useRubric}
+                  onChange={(e) => setUseRubric(e.target.checked)}
+                  className="w-4 h-4 text-[#39A900] focus:ring-[#39A900] rounded cursor-pointer"
+                />
+                <span>Esta actividad utiliza una rúbrica de evaluación pedagógica</span>
+              </label>
+
+              {useRubric && (
+                <button
+                  type="button"
+                  onClick={() => setCreateRubricModalOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#00324D] text-white rounded-lg text-xs font-semibold hover:bg-[#00253a] transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Crear nueva rúbrica</span>
+                </button>
+              )}
+            </div>
+
+            {useRubric && (
+              <div className="space-y-2 pt-2 border-t border-slate-200">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex-1">
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Seleccionar rúbrica existente para esta ficha:
+                    </label>
+                    <select
+                      value={selectedRubricId}
+                      onChange={(e) => setSelectedRubricId(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-xs text-slate-800 focus:outline-none focus:border-[#39A900]"
+                    >
+                      <option value="">-- Selecciona una rúbrica --</option>
+                      {availableRubrics.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.title} ({r.isPublished ? 'PUBLICADA' : 'BORRADOR'} · {r.criteria?.length || 0} criterios)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Previsualización de la rúbrica seleccionada */}
+                {selectedRubricId && (
+                  (() => {
+                    const sel = availableRubrics.find((r) => r.id === selectedRubricId);
+                    if (!sel) return null;
+                    return (
+                      <div className="p-3 bg-white border border-slate-200 rounded-lg text-xs flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
+                            <span>Rúbrica: {sel.title}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            {sel.criteria?.length || 0} criterios · Ponderación total: {sel.totalPoints || 100} pts
+                          </div>
+                        </div>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            sel.isPublished
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {sel.isPublished ? 'PUBLICADA' : 'BORRADOR'}
+                        </span>
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            )}
+          </div>
+
           {/* 12. Estado */}
           <div className="pt-2 flex items-center justify-between border-t border-slate-100">
             <div className="flex items-center gap-3">
@@ -657,5 +774,20 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
         </form>
       )}
     </Modal>
+
+    {/* Modal de Creación Rápida de Rúbrica */}
+    {createRubricModalOpen && (
+      <RubricFormModal
+        isOpen={createRubricModalOpen}
+        onClose={() => setCreateRubricModalOpen(false)}
+        preselectedFichaId={fichaId}
+        onRubricSaved={(newRub) => {
+          setAvailableRubrics((prev) => [newRub, ...prev]);
+          setSelectedRubricId(newRub.id);
+          setUseRubric(true);
+        }}
+      />
+    )}
+  </>
   );
 };

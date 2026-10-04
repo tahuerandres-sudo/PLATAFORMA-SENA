@@ -31,7 +31,7 @@ import { useAuth } from '../../hooks/useAuth';
 
 export const InstructorLearningOutcomesView: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
-  const instructorUid = currentUser?.uid || userProfile?.uid || 'inst_carlos_mendoza';
+  const instructorUid = currentUser?.uid || userProfile?.uid || '';
 
   const [outcomes, setOutcomes] = useState<LearningOutcome[]>([]);
   const [competencies, setCompetencies] = useState<Competency[]>([]);

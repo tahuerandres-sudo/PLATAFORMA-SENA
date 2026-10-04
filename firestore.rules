@@ -306,19 +306,485 @@ service cloud.firestore {
       allow write: if isInstructor();
     }
 
+    // Anuncios Institucionales (PROMPT 13 & 13.1: Auditoría de Seguridad)
     match /announcements/{announcementId} {
-      allow read: if isAuthenticated();
-      allow write: if isInstructor();
+      // 1. Lectura: Solo usuarios autenticados.
+      // - El instructor creador siempre puede leer sus propios anuncios (incluso borradores).
+      // - Los aprendices e instructores solo pueden leer anuncios publicados ('PUBLISHED').
+      // - Borradores ('DRAFT') o archivados de otros instructores no son accesibles por aprendices.
+      allow read: if isAuthenticated() && (
+        resource.data.status == 'PUBLISHED' ||
+        resource.data.createdBy == request.auth.uid ||
+        isInstructor()
+      );
+
+      // 2. Creación:
+      // - Únicamente instructores autenticados.
+      // - Inmutabilidad del creador: createdBy DEBE ser el UID del instructor solicitante.
+      // - Si el anuncio va dirigido a una ficha específica (targetType == 'FICHA'),
+      //   el instructor DEBE estar asignado a esa ficha en ficha.instructorIds.
+      allow create: if isInstructor()
+        && request.resource.data.createdBy == request.auth.uid
+        && (
+          request.resource.data.targetType != 'FICHA'
+          || (
+            request.resource.data.targetIds.size() > 0
+            && isFichaInstructor(request.resource.data.targetIds[0])
+          )
+          || (
+            'fichaIds' in request.resource.data
+            && request.resource.data.fichaIds.size() > 0
+            && isFichaInstructor(request.resource.data.fichaIds[0])
+          )
+        );
+
+      // 3. Actualización:
+      // - Únicamente el instructor que creó el anuncio (no otros instructores ni aprendices).
+      // - Inmutabilidad de createdBy: no se puede transferir la autoría.
+      // - Si se actualiza o asigna a una ficha (targetType == 'FICHA'),
+      //   el instructor debe estar asignado a dicha ficha.
+      allow update: if isInstructor()
+        && resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdBy == resource.data.createdBy
+        && (
+          request.resource.data.targetType != 'FICHA'
+          || (
+            request.resource.data.targetIds.size() > 0
+            && isFichaInstructor(request.resource.data.targetIds[0])
+          )
+          || (
+            'fichaIds' in request.resource.data
+            && request.resource.data.fichaIds.size() > 0
+            && isFichaInstructor(request.resource.data.fichaIds[0])
+          )
+        );
+
+      // 4. Eliminación:
+      // - Únicamente el instructor creador. Los aprendices no pueden eliminar anuncios.
+      allow delete: if isInstructor() && resource.data.createdBy == request.auth.uid;
     }
 
+    // Notificaciones del Sistema (PROMPT 13 & 16: Centro de Notificaciones y Seguridad RBAC)
     match /notifications/{notificationId} {
-      allow read, update: if isAuthenticated();
-      allow create: if isAuthenticated();
+      // 1. Lectura privada:
+      // - Un usuario (aprendiz o instructor) ÚNICAMENTE puede leer sus propias notificaciones.
+      // - Ningún aprendiz puede leer notificaciones de otro aprendiz.
+      // - Ningún instructor puede leer notificaciones privadas de aprendices (salvo que sea el destinatario).
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        (
+          'recipientUserId' in resource.data &&
+          resource.data.recipientUserId == request.auth.uid
+        )
+      );
+
+      // 2. Creación:
+      // - Si es un instructor: puede emitir notificaciones académicas oficiales para aprendices
+      //   (calificaciones, actividades, anuncios, llamados de atención, restricciones, etc.).
+      // - Si es un aprendiz: ÚNICAMENTE puede generar notificaciones relacionadas con sus
+      //   propias acciones legítimas (radicación de evidencias, reenvíos, justificaciones y gamificación propia).
+      //   NUNCA puede auto-aprobarse ni emitir veredictos oficiales (EVIDENCE_APPROVED, etc.).
+      allow create: if isAuthenticated() && (
+        (
+          isInstructor() &&
+          request.resource.data.userId is string &&
+          request.resource.data.userId.size() > 0 &&
+          request.resource.data.title is string &&
+          request.resource.data.title.size() > 0
+        ) ||
+        (
+          // Tipos permitidos para el aprendiz (radicaciones legítimas y gamificación propia)
+          request.resource.data.type in [
+            'EVIDENCE_SUBMITTED', 'EVIDENCE_RESUBMITTED', 'resubmission',
+            'JUSTIFICATION_RECEIVED', 'justification',
+            'LEVEL_UP', 'BADGE_EARNED', 'ACHIEVEMENT_EARNED',
+            'reminder', 'GENERAL'
+          ]
+          && (
+            request.resource.data.userId == request.auth.uid ||
+            (
+              'metadata' in request.resource.data &&
+              (
+                request.resource.data.metadata.learnerId == request.auth.uid ||
+                request.resource.data.metadata.apprenticeId == request.auth.uid ||
+                request.resource.data.metadata.userId == request.auth.uid
+              )
+            )
+          )
+        )
+      );
+
+      // 3. Actualización:
+      // - El usuario receptor ÚNICAMENTE puede actualizar el estado de lectura (read / isRead / updatedAt).
+      // - No puede modificar: userId, recipientUserId, type, title, message, relatedId, relatedType, createdAt, metadata.
+      // - O el instructor emisor si está re-sincronizando la notificación (idempotencia).
+      allow update: if isAuthenticated() && (
+        (
+          // Usuario receptor marcando como leído
+          (
+            resource.data.userId == request.auth.uid ||
+            (
+              'recipientUserId' in resource.data &&
+              resource.data.recipientUserId == request.auth.uid
+            )
+          )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'isRead', 'updatedAt'])
+        ) ||
+        (
+          // Instructor actualizando notificación académica
+          isInstructor()
+        )
+      );
+
+      // 4. Eliminación:
+      // - Solo el receptor legítimo puede eliminar su propia notificación.
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        (
+          'recipientUserId' in resource.data &&
+          resource.data.recipientUserId == request.auth.uid
+        )
+      );
     }
 
-    match /gamification/{apprenticeId} {
+    // =========================================================================
+    // Gamificación Institucional (PROMPT 14 & 14.1: Auditoría de Seguridad y Fuente de Verdad)
+    // =========================================================================
+
+    // Perfiles de Gamificación (Puntos XP, nivel, rachas)
+    match /gamificationProfiles/{userId} {
+      allow read: if isAuthenticated();
+
+      // 1. Creación de perfil inicial:
+      // - El aprendiz únicamente puede inicializar su perfil con contadores en CERO.
+      // - No puede auto-asignarse puntos, XP ni niveles superiores en la creación.
+      // - El instructor puede crear perfiles para aprendices de su formación.
+      allow create: if isAuthenticated() && (
+        isInstructor() ||
+        (
+          request.auth.uid == userId
+          && request.resource.data.userId == userId
+          && request.resource.data.totalPoints == 0
+          && request.resource.data.experiencePoints == 0
+          && request.resource.data.level == 1
+          && (!('completedActivities' in request.resource.data) || request.resource.data.completedActivities == 0)
+          && (!('approvedEvidenceCount' in request.resource.data) || request.resource.data.approvedEvidenceCount == 0)
+          && (!('achievementsCount' in request.resource.data) || request.resource.data.achievementsCount == 0)
+          && (!('badgesCount' in request.resource.data) || request.resource.data.badgesCount == 0)
+          && (!('currentStreak' in request.resource.data) || request.resource.data.currentStreak <= 1)
+          && (!('longestStreak' in request.resource.data) || request.resource.data.longestStreak <= 1)
+        )
+      );
+
+      // 2. Actualización de perfil:
+      // - El aprendiz NO puede modificar bajo ninguna circunstancia sus puntos (totalPoints, experiencePoints),
+      //   su nivel (level), sus evidencias aprobadas (approvedEvidenceCount), insignias (badgesCount) ni rachas.
+      // - La regla impone estricta inmutabilidad en los campos de puntuación para el aprendiz.
+      // - Únicamente el instructor asignado o sistema verificado puede alterar estadísticas cuantitativas.
+      allow update: if isAuthenticated() && (
+        isInstructor() ||
+        (
+          request.auth.uid == userId
+          && request.resource.data.userId == resource.data.userId
+          // Inmutabilidad estricta de métricas de gamificación para el aprendiz:
+          && request.resource.data.totalPoints == resource.data.totalPoints
+          && request.resource.data.experiencePoints == resource.data.experiencePoints
+          && request.resource.data.level == resource.data.level
+          && request.resource.data.completedActivities == resource.data.completedActivities
+          && request.resource.data.approvedEvidenceCount == resource.data.approvedEvidenceCount
+          && request.resource.data.achievementsCount == resource.data.achievementsCount
+          && request.resource.data.badgesCount == resource.data.badgesCount
+          && request.resource.data.currentStreak == resource.data.currentStreak
+          && request.resource.data.longestStreak == resource.data.longestStreak
+        )
+      );
+
+      // 3. Prohibición de eliminación
+      allow delete: if false;
+    }
+
+    // Historial Inmutable de Eventos de Gamificación (Append-Only Ledger)
+    match /gamificationEvents/{eventId} {
+      // 1. Lectura privada y supervisada:
+      // - El aprendiz solo puede consultar su propio historial de eventos.
+      // - El instructor puede auditar los eventos formativos.
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isInstructor()
+      );
+
+      // 2. Creación blindada de eventos:
+      // - APRENDICES:
+      //   * ÚNICAMENTE pueden registrar 'EVIDENCE_SUBMITTED' o 'CORRECTION_COMPLETED'.
+      //   * Debe corresponder a su propio UID: userId == request.auth.uid.
+      //   * Puntuación fija e inalterable: exactamente 10 puntos.
+      //   * Debe referenciar obligatoriamente una entrega legítima en /submissions de la que sea titular.
+      //   * BLOQUEADOS ABSOLUTAMENTE PARA APRENDICES:
+      //     EVIDENCE_APPROVED, MANUAL_ADJUSTMENT, ATTENDANCE_PRESENT, ACTIVITY_COMPLETED, BADGE, STREAK.
+      // - INSTRUCTORES:
+      //   * EVIDENCE_APPROVED: Exige verificación relacional de que la evidencia exista en /submissions
+      //     y tenga calificación oficial 'A'.
+      //   * ATTENDANCE_PRESENT: Exige verificación relacional de que el registro exista en /attendance
+      //     y su estado sea 'PRESENTE'.
+      //   * MANUAL_ADJUSTMENT: Exige autoría del instructor (createdBy == uid) y justificación explícita.
+      allow create: if isAuthenticated() && (
+        (
+          // Rama Aprendiz: Solo radicación de evidencias propias (+10 XP)
+          request.resource.data.userId == request.auth.uid
+          && request.resource.data.type in ['EVIDENCE_SUBMITTED', 'CORRECTION_COMPLETED']
+          && request.resource.data.points == 10
+          && request.resource.data.sourceType == 'submission'
+          && request.resource.data.sourceId != null
+          && exists(/databases/$(database)/documents/submissions/$(request.resource.data.sourceId))
+          && (
+            get(/databases/$(database)/documents/submissions/$(request.resource.data.sourceId)).data.learnerId == request.auth.uid ||
+            get(/databases/$(database)/documents/submissions/$(request.resource.data.sourceId)).data.userId == request.auth.uid
+          )
+        ) ||
+        (
+          // Rama Instructor
+          isInstructor() && (
+            (
+              // Evidencia Aprobada: Requiere dictamen oficial 'A' en /submissions
+              request.resource.data.type == 'EVIDENCE_APPROVED'
+              && request.resource.data.sourceId != null
+              && exists(/databases/$(database)/documents/submissions/$(request.resource.data.sourceId))
+              && get(/databases/$(database)/documents/submissions/$(request.resource.data.sourceId)).data.grade == 'A'
+            ) ||
+            (
+              // Asistencia Presente: Requiere registro en /attendance con status 'PRESENTE'
+              request.resource.data.type == 'ATTENDANCE_PRESENT'
+              && request.resource.data.sourceId != null
+              && exists(/databases/$(database)/documents/attendance/$(request.resource.data.sourceId))
+              && get(/databases/$(database)/documents/attendance/$(request.resource.data.sourceId)).data.status == 'PRESENTE'
+            ) ||
+            (
+              // Ajuste Manual Formativo: Requiere autoría, motivo y aprendiz válido
+              request.resource.data.type == 'MANUAL_ADJUSTMENT'
+              && request.resource.data.createdBy == request.auth.uid
+              && request.resource.data.description is string
+              && request.resource.data.description.size() > 0
+            ) ||
+            (
+              // Actividades completadas o bonificaciones formativas evaluadas por instructor
+              request.resource.data.type in ['ACTIVITY_COMPLETED', 'STREAK', 'ACHIEVEMENT', 'BADGE']
+            )
+          )
+        )
+      );
+
+      // 3. Inmutabilidad estricta: Auditoría permanente contra fraudes
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Catálogo Institucional de Insignias (Solo lectura aprendices, gestión instructores)
+    match /badges/{badgeId} {
       allow read: if isAuthenticated();
       allow write: if isInstructor();
+    }
+
+    // Catálogo Institucional de Logros (Solo lectura aprendices, gestión instructores)
+    match /achievements/{achievementId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    // Insignias Desbloqueadas por Usuario (Prevención de autoasignación arbitraria)
+    match /userBadges/{userBadgeId} {
+      allow read: if isAuthenticated();
+      // Solo el instructor o sistema verificado puede otorgar insignias oficiales.
+      // Los aprendices NO pueden auto-asignarse insignias arbitrariamente.
+      allow create: if isInstructor() || (
+        isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.badgeId == 'first_evidence'
+        && exists(/databases/$(database)/documents/gamificationProfiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/gamificationProfiles/$(request.auth.uid)).data.completedActivities > 0
+      );
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // RÚBRICAS Y CRITERIOS PEDAGÓGICOS (PROMPT 19 & 19.1)
+    // ==========================================
+    match /rubrics/{rubricId} {
+      // Lectura autorizada:
+      // - Instructor asignado a la ficha o creador
+      // - Aprendiz: Solo si la rúbrica está explícitamente publicada (isPublished == true)
+      allow read: if isAuthenticated() && (
+        (isInstructor() && (isFichaInstructor(resource.data.fichaId) || resource.data.createdBy == request.auth.uid)) ||
+        (resource.data.isPublished == true)
+      );
+
+      // Creación: Solo instructor asignado a la ficha de la actividad
+      // CASO 2: Learner intenta create -> DENEGADO
+      // CASO 6: Instructor asignado a la ficha -> PERMITIDO
+      // CASO 7: Instructor NO asignado a la ficha intenta crear -> DENEGADO
+      allow create: if isInstructor()
+                    && ('fichaId' in request.resource.data)
+                    && isFichaInstructor(request.resource.data.fichaId)
+                    && request.resource.data.createdBy == request.auth.uid
+                    && ('title' in request.resource.data)
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && ('totalPoints' in request.resource.data)
+                    && request.resource.data.totalPoints is number
+                    && request.resource.data.totalPoints > 0;
+
+      // Actualización: Solo instructor actualmente asignado a la ficha
+      // CASO 1: Learner intenta update -> DENEGADO
+      // CASO 7: Instructor NO asignado a la ficha intenta modificar -> DENEGADO
+      allow update: if isInstructor()
+                    && isFichaInstructor(resource.data.fichaId)
+                    && (!('fichaId' in request.resource.data) || request.resource.data.fichaId == resource.data.fichaId);
+
+      // Eliminación: Solo instructor asignado a la ficha y si no tiene evaluaciones registradas
+      allow delete: if isInstructor()
+                    && isFichaInstructor(resource.data.fichaId)
+                    && (!('evaluationCount' in resource.data) || resource.data.evaluationCount == 0);
+    }
+
+    match /rubricCriteria/{criterionId} {
+      allow read: if isAuthenticated();
+      allow write: if isInstructor();
+    }
+
+    // Evaluaciones Formativas de Rúbrica (PROMPT 19 & 19.1)
+    match /rubricEvaluations/{evaluationId} {
+      // Lectura autorizada:
+      // - El aprendiz únicamente puede leer sus propias evaluaciones (CASO 5: Aprendiz leyendo otro learner -> DENEGADO)
+      // - El instructor únicamente si está asignado a la ficha correspondiente
+      allow read: if isAuthenticated() && (
+        resource.data.learnerId == request.auth.uid ||
+        isFichaInstructor(resource.data.fichaId)
+      );
+
+      // Creación: Solo instructor asignado a la ficha y registrado como evaluador
+      // CASO 3: Learner intenta create -> DENEGADO
+      allow create: if isInstructor()
+                    && ('fichaId' in request.resource.data)
+                    && isFichaInstructor(request.resource.data.fichaId)
+                    && request.resource.data.evaluatorId == request.auth.uid
+                    && ('learnerId' in request.resource.data)
+                    && ('submissionId' in request.resource.data)
+                    && ('activityId' in request.resource.data)
+                    && ('rubricId' in request.resource.data)
+                    && ('totalPoints' in request.resource.data)
+                    && request.resource.data.totalPoints is number
+                    && request.resource.data.totalPoints >= 0
+                    && ('percentage' in request.resource.data)
+                    && request.resource.data.percentage is number
+                    && request.resource.data.percentage >= 0
+                    && request.resource.data.percentage <= 100;
+
+      // Actualización: Solo instructor asignado a la ficha.
+      // CASO 4: Learner intenta update de points, percentage, learnerId, etc. -> DENEGADO (bloqueado por isInstructor())
+      // Bloqueo de alteración de referencias críticas (inmutables)
+      allow update: if isInstructor()
+                    && isFichaInstructor(resource.data.fichaId)
+                    && request.resource.data.learnerId == resource.data.learnerId
+                    && request.resource.data.submissionId == resource.data.submissionId
+                    && request.resource.data.activityId == resource.data.activityId
+                    && request.resource.data.rubricId == resource.data.rubricId
+                    && request.resource.data.fichaId == resource.data.fichaId
+                    && request.resource.data.evaluatorId == resource.data.evaluatorId;
+
+      // Eliminación no permitida para conservar trazabilidad e inmutabilidad académica
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // CENTRO DE RECURSOS Y MATERIALES DIDÁCTICOS (PROMPT 20)
+    // ==========================================
+    match /resources/{resourceId} {
+      function isApprenticeEnrolledInFicha(fId) {
+        return fId != null && fId != '' && (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           getUserData().fichaId == fId) ||
+          exists(/databases/$(database)/documents/enrollments/$(request.auth.uid + '_' + fId)) ||
+          exists(/databases/$(database)/documents/enrollments/$(fId + '_' + request.auth.uid))
+        );
+      }
+
+      // Lectura autorizada:
+      // - Instructor asignado a la ficha del recurso o creador
+      // - Aprendiz: Solo si está publicado (isPublished == true && status == 'published')
+      //   y cumple visibilidad (ALL, o matriculado en la ficha / programa)
+      // - Usuario no autenticado: Denegado
+      allow read: if isAuthenticated() && (
+        (isInstructor() && (
+          !('fichaId' in resource.data) ||
+          resource.data.fichaId == null ||
+          resource.data.fichaId == '' ||
+          isFichaInstructor(resource.data.fichaId) ||
+          resource.data.createdBy == request.auth.uid
+        )) ||
+        (
+          resource.data.isPublished == true &&
+          resource.data.status == 'published' &&
+          (
+            resource.data.visibility == 'ALL' ||
+            (
+              'fichaId' in resource.data &&
+              resource.data.fichaId != null &&
+              resource.data.fichaId != '' &&
+              isApprenticeEnrolledInFicha(resource.data.fichaId)
+            ) ||
+            (
+              'programId' in resource.data &&
+              resource.data.programId != null &&
+              resource.data.programId != '' &&
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+              getUserData().programId == resource.data.programId
+            )
+          )
+        )
+      );
+
+      // Creación: Solo instructor
+      // Si especifica fichaId, debe estar asignado a esa ficha
+      // Aprendiz denegado absolutamente
+      allow create: if isInstructor()
+                    && request.resource.data.createdBy == request.auth.uid
+                    && ('title' in request.resource.data)
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && (
+                      !('fichaId' in request.resource.data) ||
+                      request.resource.data.fichaId == null ||
+                      request.resource.data.fichaId == '' ||
+                      isFichaInstructor(request.resource.data.fichaId)
+                    );
+
+      // Actualización: Solo instructor asignado a la ficha del recurso o creador
+      // Si cambia de ficha, debe tener asignada la nueva ficha
+      // Aprendiz denegado absolutamente
+      allow update: if isInstructor()
+                    && (
+                      !('fichaId' in resource.data) ||
+                      resource.data.fichaId == null ||
+                      resource.data.fichaId == '' ||
+                      isFichaInstructor(resource.data.fichaId)
+                    )
+                    && (
+                      !('fichaId' in request.resource.data) ||
+                      request.resource.data.fichaId == resource.data.fichaId ||
+                      request.resource.data.fichaId == null ||
+                      request.resource.data.fichaId == '' ||
+                      isFichaInstructor(request.resource.data.fichaId)
+                    );
+
+      // Eliminación: Solo instructor asignado o creador
+      allow delete: if isInstructor()
+                    && (
+                      !('fichaId' in resource.data) ||
+                      resource.data.fichaId == null ||
+                      resource.data.fichaId == '' ||
+                      isFichaInstructor(resource.data.fichaId)
+                    )
+                    && resource.data.createdBy == request.auth.uid;
     }
   }
 }

@@ -20,6 +20,8 @@ import {
   Users,
   Eye,
   SlidersHorizontal,
+  Sliders,
+  Award,
 } from 'lucide-react';
 import {
   EvidenceActivity,
@@ -30,9 +32,13 @@ import {
   TrainingProgram,
   LearningOutcome,
   Competency,
+  Rubric,
 } from '../../types/academic';
 import { activityService, ActivityStats } from '../../services/academic/activityService';
+import { rubricService } from '../../services/academic/rubricService';
 import { ActivityFormModal } from '../../components/evidence/ActivityFormModal';
+import { RubricFormModal } from '../../components/rubrics/RubricFormModal';
+import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
 import { DriveConnectionStatus } from '../../components/evidence/DriveConnectionStatus';
 import { getEvidenceTypeConfig } from '../../config/fileLimits';
 import { StatusBadge } from '../../components/ui/StatusBadge';
@@ -58,9 +64,17 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
   const [programs, setPrograms] = useState<TrainingProgram[]>([]);
   const [learningOutcomes, setLearningOutcomes] = useState<LearningOutcome[]>([]);
   const [competencies, setCompetencies] = useState<Competency[]>([]);
+  const [rubricsMap, setRubricsMap] = useState<Record<string, Rubric>>({});
   const [loading, setLoading] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingActivity, setEditingActivity] = useState<EvidenceActivity | null>(null);
+
+  // Estados de modales de rúbricas (Prompt 19)
+  const [isRubricModalOpen, setIsRubricModalOpen] = useState(false);
+  const [editingRubric, setEditingRubric] = useState<Rubric | null>(null);
+  const [rubricTargetActivity, setRubricTargetActivity] = useState<EvidenceActivity | null>(null);
+  const [isRubricDetailOpen, setIsRubricDetailOpen] = useState(false);
+  const [viewingRubric, setViewingRubric] = useState<Rubric | null>(null);
 
   // Filtros
   const [selectedFicha, setSelectedFicha] = useState<string>('all');
@@ -99,17 +113,43 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
       }
       setActivities(relevantActs);
 
-      // Cargar estadísticas para cada actividad
+      // Cargar estadísticas y rúbricas para cada actividad
       const newStats: Record<string, ActivityStats> = {};
+      const newRubrics: Record<string, Rubric> = {};
+
       for (const act of relevantActs) {
         newStats[act.id] = await activityService.getActivityStats(act.id);
+        if (act.rubricId) {
+          const rub = await rubricService.getRubric(act.rubricId);
+          if (rub) newRubrics[act.id] = rub;
+        } else {
+          const rub = await rubricService.getRubricByActivity(act.id);
+          if (rub) newRubrics[act.id] = rub;
+        }
       }
       setStatsMap(newStats);
+      setRubricsMap(newRubrics);
     } catch (err) {
       console.error('[InstructorActivitiesView] Error cargando actividades:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRubricSaved = (savedRubric: Rubric) => {
+    if (savedRubric.activityId) {
+      setRubricsMap((prev) => ({ ...prev, [savedRubric.activityId!]: savedRubric }));
+      setActivities((prev) =>
+        prev.map((a) =>
+          a.id === savedRubric.activityId
+            ? { ...a, rubricId: savedRubric.id, rubricTitle: savedRubric.title }
+            : a
+        )
+      );
+    }
+    setIsRubricModalOpen(false);
+    setEditingRubric(null);
+    setRubricTargetActivity(null);
   };
 
   useEffect(() => {
@@ -161,6 +201,17 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
         </div>
         <div className="flex items-center gap-3">
           <DriveConnectionStatus compact />
+          <button
+            onClick={() => {
+              setEditingRubric(null);
+              setRubricTargetActivity(null);
+              setIsRubricModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-white border border-[#39A900] text-[#2E8500] hover:bg-emerald-50 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <Sliders className="w-4 h-4" />
+            + Crear Rúbrica
+          </button>
           <button
             onClick={() => {
               setEditingActivity(null);
@@ -315,6 +366,79 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
                     </span>
                   </div>
 
+                  {/* Rúbrica Pedagógica Asociada (Prompt 19) */}
+                  {(() => {
+                    const actRubric = rubricsMap[act.id];
+                    return (
+                      <div className="p-2.5 rounded-lg border text-xs bg-slate-50/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-slate-200">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <Sliders className="w-4 h-4 text-[#39A900] shrink-0" />
+                          {actRubric ? (
+                            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                              <span className="font-bold text-[#00324D] truncate max-w-[160px]" title={actRubric.title}>
+                                {actRubric.title}
+                              </span>
+                              <span
+                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                                  actRubric.isPublished
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                              >
+                                {actRubric.isPublished ? 'Publicada (100%)' : 'Borrador'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">
+                              Sin rúbrica asociada
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                          {actRubric ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setViewingRubric(actRubric);
+                                  setIsRubricDetailOpen(true);
+                                }}
+                                className="px-2 py-1 text-[10.5px] font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                              >
+                                Ver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingRubric(actRubric);
+                                  setRubricTargetActivity(act);
+                                  setIsRubricModalOpen(true);
+                                }}
+                                className="px-2 py-1 text-[10.5px] font-bold text-[#2E8500] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors cursor-pointer"
+                              >
+                                Editar
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingRubric(null);
+                                setRubricTargetActivity(act);
+                                setIsRubricModalOpen(true);
+                              }}
+                              className="px-2 py-1 text-[10.5px] font-bold text-[#2E8500] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors cursor-pointer flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" />
+                              Asignar Rúbrica
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Barra de progreso de entregas */}
                   <div className="space-y-1.5 pt-1">
                     <div className="flex items-center justify-between text-[11px]">
@@ -395,6 +519,35 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
         onActivitySaved={handleActivitySaved}
         initialActivity={editingActivity}
       />
+
+      {/* Modal: Crear / Editar Rúbrica Pedagógica (Prompt 19) */}
+      {isRubricModalOpen && (
+        <RubricFormModal
+          isOpen={isRubricModalOpen}
+          onClose={() => {
+            setIsRubricModalOpen(false);
+            setEditingRubric(null);
+            setRubricTargetActivity(null);
+          }}
+          onRubricSaved={handleRubricSaved}
+          initialRubric={editingRubric}
+          preselectedFichaId={rubricTargetActivity?.fichaId || (selectedFicha !== 'all' ? selectedFicha : undefined)}
+          preselectedActivityId={rubricTargetActivity?.id}
+        />
+      )}
+
+      {/* Modal: Consulta Detallada de Rúbrica Pedagógica */}
+      {isRubricDetailOpen && viewingRubric && (
+        <RubricDetailModal
+          isOpen={isRubricDetailOpen}
+          onClose={() => {
+            setIsRubricDetailOpen(false);
+            setViewingRubric(null);
+          }}
+          rubric={viewingRubric}
+          userRole="instructor"
+        />
+      )}
     </div>
   );
 };

@@ -23,6 +23,7 @@ import {
   BatchGradingPayload,
 } from '../../types/academic';
 import { submissionService } from '../submissions/submissionService';
+import { notificationService } from './notificationService';
 
 const ACTIVITIES_COLLECTION = FIRESTORE_COLLECTIONS.ACTIVITIES;
 
@@ -123,6 +124,24 @@ export const activityService = {
     } catch (err) {
       console.warn('[activityService] Aviso guardando actividad en Firestore:', err);
     }
+
+    // PROMPT 13 & 16 - Notificar a aprendices de la ficha cuando la actividad se publica o actualiza
+    if (updatedActivity.status === 'published' && updatedActivity.fichaId) {
+      if (index === -1) {
+        notificationService.notifyActivityPublished({
+          activityId: updatedActivity.id,
+          title: updatedActivity.title || updatedActivity.name || 'Actividad de Aprendizaje',
+          fichaId: updatedActivity.fichaId,
+          courseName: (updatedActivity as any).courseName,
+        }).catch((e) => console.warn('[activityService] Error notificando publicación de actividad:', e));
+      } else {
+        notificationService.notifyActivityUpdated({
+          activityId: updatedActivity.id,
+          title: updatedActivity.title || updatedActivity.name || 'Actividad de Aprendizaje',
+          fichaId: updatedActivity.fichaId,
+        }).catch((e) => console.warn('[activityService] Error notificando actualización de actividad:', e));
+      }
+    }
   },
 
   /**
@@ -134,9 +153,14 @@ export const activityService = {
   ): Promise<void> {
     const now = new Date().toISOString();
 
-    inMemoryActivities = inMemoryActivities.map((a) =>
-      a.id === activityId ? { ...a, status, updatedAt: now } : a
-    );
+    let targetActivity: EvidenceActivity | undefined;
+    inMemoryActivities = inMemoryActivities.map((a) => {
+      if (a.id === activityId) {
+        targetActivity = { ...a, status, updatedAt: now };
+        return targetActivity;
+      }
+      return a;
+    });
 
     try {
       await updateDoc(doc(db, ACTIVITIES_COLLECTION, activityId), {
@@ -145,6 +169,19 @@ export const activityService = {
       });
     } catch (err) {
       console.warn('[activityService] Aviso actualizando estado en Firestore:', err);
+    }
+
+    // PROMPT 13 - Evento B: Si pasa a publicado
+    if (status === 'published') {
+      const act = targetActivity || inMemoryActivities.find((a) => a.id === activityId);
+      if (act && act.fichaId) {
+        notificationService.notifyActivityPublished({
+          activityId: act.id,
+          title: act.title || act.name || 'Actividad de Aprendizaje',
+          fichaId: act.fichaId,
+          courseName: (act as any).courseName,
+        }).catch((e) => console.warn('[activityService] Error notificando publicación de actividad:', e));
+      }
     }
   },
 

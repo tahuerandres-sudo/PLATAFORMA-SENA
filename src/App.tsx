@@ -24,6 +24,7 @@ import { InstructorApprenticesView } from './views/instructor/InstructorApprenti
 import { InstructorCompetenciesView } from './views/instructor/InstructorCompetenciesView';
 import { InstructorLearningOutcomesView } from './views/instructor/InstructorLearningOutcomesView';
 import { InstructorActivitiesView } from './views/instructor/InstructorActivitiesView';
+import { InstructorCalendarView } from './views/instructor/InstructorCalendarView';
 import { InstructorSubmissionsView } from './views/instructor/InstructorSubmissionsView';
 import { InstructorGradesView } from './views/instructor/InstructorGradesView';
 import { InstructorAttendanceView } from './views/instructor/InstructorAttendanceView';
@@ -40,6 +41,7 @@ import { InstructorSettingsView } from './views/instructor/InstructorSettingsVie
 import { ApprenticeDashboard } from './views/apprentice/ApprenticeDashboard';
 import { ApprenticeCoursesView } from './views/apprentice/ApprenticeCoursesView';
 import { ApprenticeActivitiesView } from './views/apprentice/ApprenticeActivitiesView';
+import { ApprenticeCalendarView } from './views/apprentice/ApprenticeCalendarView';
 import { ApprenticeSubmissionsView } from './views/apprentice/ApprenticeSubmissionsView';
 import { ApprenticeGradesView } from './views/apprentice/ApprenticeGradesView';
 import { ApprenticeProgressView } from './views/apprentice/ApprenticeProgressView';
@@ -48,10 +50,12 @@ import { ApprenticeRankingView } from './views/apprentice/ApprenticeRankingView'
 import { ApprenticeProfileView } from './views/apprentice/ApprenticeProfileView';
 import { ApprenticeSettingsView } from './views/apprentice/ApprenticeSettingsView';
 import { ApprenticeTrackingView } from './views/apprentice/ApprenticeTrackingView';
+import { ApprenticeAiToolsView } from './views/apprentice/ApprenticeAiToolsView';
 
 // Vistas Comunes
 import { NotificationsCenterView } from './views/common/NotificationsCenterView';
 import { Prompt0CockpitView } from './views/common/Prompt0CockpitView';
+import { notificationService } from './services/academic/notificationService';
 
 import { ShieldAlert, LogOut, RefreshCw, AlertCircle } from 'lucide-react';
 
@@ -70,6 +74,26 @@ function AppContent() {
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [accessDeniedWarning, setAccessDeniedWarning] = useState<string | null>(null);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
+
+  const userId = userProfile?.uid || currentUser?.uid || '';
+
+  // PROMPT 16: Suscripción en tiempo real al contador de notificaciones de Firestore
+  useEffect(() => {
+    if (!userId) {
+      setUnreadNotificationsCount(0);
+      return;
+    }
+
+    const unsubscribe = notificationService.subscribeToNotifications(
+      userId,
+      (liveNotifs) => {
+        setUnreadNotificationsCount(liveNotifs.filter((n) => !n.isRead).length);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [userId]);
 
   // Modal para completar perfil si faltan datos en usuario de Google
   const [completeProfileOpen, setCompleteProfileOpen] = useState(false);
@@ -97,7 +121,6 @@ function AppContent() {
       'attention_calls',
       'reports',
       'stats',
-      'ai_tools',
     ];
     if (isApprentice && instructorOnlyViews.includes(viewId)) {
       setAccessDeniedWarning(
@@ -171,7 +194,7 @@ function AppContent() {
       dashboard: 'Inicio',
       courses: 'Mis cursos',
       fichas: 'Mis fichas',
-      apprentices: 'Aprendices',
+      apprentices: 'Aprendices y Expedientes',
       competencies: 'Competencias',
       learning_outcomes: 'Resultados de aprendizaje',
       activities: 'Actividades',
@@ -186,7 +209,7 @@ function AppContent() {
       gamification: 'Gamificación',
       ai_tools: 'Herramientas IA',
       notifications: 'Notificaciones',
-      profile: 'Perfil',
+      profile: 'Mi Perfil / Expediente Académico',
       settings: 'Configuración',
       progress: 'Mi progreso',
       achievements: 'Mis logros',
@@ -211,7 +234,7 @@ function AppContent() {
         onNavigateSettings={() => handleNavigate('settings')}
         onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
         onNavigateBlueprint={() => handleNavigate('blueprint')}
-        unreadCount={2}
+        unreadCount={unreadNotificationsCount}
       />
 
       {/* 2. Cuerpo Principal con Sidebar Desktop y Contenido */}
@@ -222,6 +245,7 @@ function AppContent() {
             currentRole={isInstructor ? 'instructor' : 'apprentice'}
             activeView={activeView}
             onNavigate={handleNavigate}
+            unreadNotificationsCount={unreadNotificationsCount}
             className="hidden md:flex"
           />
         )}
@@ -280,6 +304,12 @@ function AppContent() {
                   onNavigateToSubmissions={() => handleNavigate('submissions')}
                 />
               )}
+              {activeView === 'calendar' && (
+                <InstructorCalendarView
+                  onNavigateToSubmissions={(activityId) => handleNavigate('submissions')}
+                  onNavigateToActivities={() => handleNavigate('activities')}
+                />
+              )}
               {activeView === 'submissions' && <InstructorSubmissionsView />}
               {activeView === 'grades' && <InstructorGradesView />}
               {activeView === 'attendance' && <InstructorAttendanceView />}
@@ -290,7 +320,9 @@ function AppContent() {
               {activeView === 'announcements' && <InstructorAnnouncementsView />}
               {activeView === 'gamification' && <InstructorGamificationView />}
               {activeView === 'ai_tools' && <InstructorAiToolsView />}
-              {activeView === 'notifications' && <NotificationsCenterView />}
+              {activeView === 'notifications' && (
+                <NotificationsCenterView onNavigate={handleNavigate} />
+              )}
               {activeView === 'settings' && <InstructorSettingsView />}
             </>
           ) : (
@@ -308,14 +340,23 @@ function AppContent() {
                 />
               )}
               {activeView === 'activities' && <ApprenticeActivitiesView />}
+              {activeView === 'calendar' && (
+                <ApprenticeCalendarView
+                  onNavigateToActivities={(activityId) => handleNavigate('activities')}
+                  onNavigateToSubmissions={(activityId) => handleNavigate('submissions')}
+                />
+              )}
               {activeView === 'submissions' && <ApprenticeSubmissionsView />}
               {activeView === 'grades' && <ApprenticeGradesView />}
               {activeView === 'attendance_tracking' && <ApprenticeTrackingView />}
               {activeView === 'progress' && <ApprenticeProgressView />}
               {activeView === 'achievements' && <ApprenticeAchievementsView />}
               {activeView === 'ranking' && <ApprenticeRankingView />}
+              {activeView === 'ai_tools' && <ApprenticeAiToolsView />}
               {activeView === 'profile' && <ApprenticeProfileView />}
-              {activeView === 'notifications' && <NotificationsCenterView />}
+              {activeView === 'notifications' && (
+                <NotificationsCenterView onNavigate={handleNavigate} />
+              )}
               {activeView === 'settings' && <ApprenticeSettingsView />}
             </>
           )}
@@ -329,7 +370,7 @@ function AppContent() {
         currentRole={isInstructor ? 'instructor' : 'apprentice'}
         activeView={activeView}
         onNavigate={handleNavigate}
-        unreadCount={2}
+        unreadCount={unreadNotificationsCount}
       />
 
       {/* Modal para completar datos de perfil */}

@@ -343,6 +343,220 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
       },
       "required": ["id", "userId", "fichaId", "type", "category", "description", "createdBy", "date", "status"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Anuncio o comunicado institucional publicado por un instructor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del anuncio" },
+        "title": { "type": "string", "description": "Título del anuncio" },
+        "message": { "type": "string", "description": "Cuerpo del anuncio" },
+        "createdBy": { "type": "string", "description": "UID del instructor autor" },
+        "creatorName": { "type": "string", "description": "Nombre visible del instructor" },
+        "creatorEmail": { "type": "string", "description": "Correo del instructor" },
+        "targetType": { "type": "string", "enum": ["ALL", "PROGRAM", "FICHA", "COURSE", "USER"], "description": "Tipo de destinatario" },
+        "targetIds": { "type": "array", "items": { "type": "string" }, "description": "IDs de los destinatarios" },
+        "programIds": { "type": "array", "items": { "type": "string" }, "description": "IDs de programas asociados" },
+        "fichaIds": { "type": "array", "items": { "type": "string" }, "description": "IDs de fichas asociadas" },
+        "courseIds": { "type": "array", "items": { "type": "string" }, "description": "IDs de cursos asociados" },
+        "priority": { "type": "string", "enum": ["NORMAL", "IMPORTANT", "URGENT"], "description": "Nivel de prioridad" },
+        "status": { "type": "string", "enum": ["DRAFT", "PUBLISHED", "ARCHIVED"], "description": "Estado del anuncio" },
+        "publishedAt": { "type": "string", "description": "Fecha de publicación" },
+        "expiresAt": { "type": "string", "description": "Fecha límite opcional" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "title", "message", "createdBy", "targetType", "targetIds", "priority", "status", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Notificación persistente dirigida a un usuario específico",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID determinista de la notificación" },
+        "userId": { "type": "string", "description": "UID del destinatario de la notificación" },
+        "recipientUserId": { "type": "string", "description": "Alias de compatibilidad del destinatario" },
+        "title": { "type": "string", "description": "Título breve de la alerta o aviso" },
+        "message": { "type": "string", "description": "Mensaje descriptivo" },
+        "description": { "type": "string", "description": "Alias de texto" },
+        "type": { "type": "string", "description": "Tipo de notificación académica o del sistema" },
+        "read": { "type": "boolean", "description": "Indica si la notificación ha sido leída" },
+        "isRead": { "type": "boolean", "description": "Alias de lectura" },
+        "relatedId": { "type": "string", "description": "ID del recurso relacionado (entrega, actividad, etc.)" },
+        "relatedType": { "type": "string", "description": "Tipo del recurso relacionado" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de emisión" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de última lectura o actualización" }
+      },
+      "required": ["id", "userId", "title", "message", "type", "read", "createdAt"]
+    },
+    "GamificationProfile": {
+      "title": "GamificationProfile",
+      "description": "Perfil de gamificación con XP acumulados, nivel y rachas formativas",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "totalPoints": { "type": "number", "description": "Puntos totales acumulados" },
+        "level": { "type": "number", "description": "Nivel alcanzado" },
+        "experiencePoints": { "type": "number", "description": "Puntos de experiencia XP" },
+        "completedActivities": { "type": "number", "description": "Actividades entregadas" },
+        "approvedEvidenceCount": { "type": "number", "description": "Evidencias aprobadas con A" },
+        "achievementsCount": { "type": "number", "description": "Logros desbloqueados" },
+        "badgesCount": { "type": "number", "description": "Insignias obtenidas" },
+        "currentStreak": { "type": "number", "description": "Días de racha activa" },
+        "longestStreak": { "type": "number", "description": "Racha máxima alcanzada" },
+        "lastActiveDate": { "type": "string", "description": "Fecha de última actividad" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["userId", "totalPoints", "level", "experiencePoints"]
+    },
+    "GamificationEvent": {
+      "title": "GamificationEvent",
+      "description": "Registro inmutable de asignación de puntos por evento formativo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID determinista del evento" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "type": { "type": "string", "description": "Tipo de evento de gamificación" },
+        "points": { "type": "number", "description": "Puntos XP otorgados" },
+        "sourceId": { "type": "string", "description": "ID del recurso origen" },
+        "sourceType": { "type": "string", "description": "Tipo de recurso origen" },
+        "description": { "type": "string", "description": "Motivo pedagógico" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha del evento" },
+        "createdBy": { "type": "string", "description": "UID del instructor o sistema" }
+      },
+      "required": ["id", "userId", "type", "points", "createdAt"]
+    },
+    "Badge": {
+      "title": "Badge",
+      "description": "Definición del catálogo institucional de insignias",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la insignia" },
+        "name": { "type": "string", "description": "Nombre de la insignia" },
+        "description": { "type": "string", "description": "Descripción del mérito" },
+        "icon": { "type": "string", "description": "Icono identificador" },
+        "category": { "type": "string", "description": "Categoría formativa" },
+        "xpReward": { "type": "number", "description": "Bonificación XP" }
+      },
+      "required": ["id", "name", "description"]
+    },
+    "UserBadge": {
+      "title": "UserBadge",
+      "description": "Registro de insignia desbloqueada por un aprendiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del desbloqueo" },
+        "userId": { "type": "string", "description": "UID del aprendiz" },
+        "badgeId": { "type": "string", "description": "ID de la insignia obtenida" },
+        "unlockedAt": { "type": "string", "format": "date-time", "description": "Fecha de obtención" }
+      },
+      "required": ["id", "userId", "badgeId", "unlockedAt"]
+    },
+    "Achievement": {
+      "title": "Achievement",
+      "description": "Definición de logro pedagógico con meta cuantitativa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del logro" },
+        "title": { "type": "string", "description": "Título del logro" },
+        "description": { "type": "string", "description": "Descripción pedagógica" },
+        "targetCount": { "type": "number", "description": "Meta cuantitativa requerida" },
+        "metric": { "type": "string", "description": "Métrica evaluada" },
+        "xpReward": { "type": "number", "description": "Recompensa en XP" }
+      },
+      "required": ["id", "title", "description", "targetCount"]
+    },
+    "Rubric": {
+      "title": "Rubric",
+      "description": "Rúbrica de evaluación pedagógica con criterios y niveles de desempeño",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la rúbrica" },
+        "activityId": { "type": "string", "description": "ID de la actividad vinculada" },
+        "activityTitle": { "type": "string", "description": "Título de la actividad" },
+        "fichaId": { "type": "string", "description": "ID de la ficha asignada" },
+        "fichaNumber": { "type": "string", "description": "Número de ficha SENA" },
+        "createdBy": { "type": "string", "description": "UID del instructor creador" },
+        "creatorName": { "type": "string", "description": "Nombre del instructor" },
+        "title": { "type": "string", "description": "Título de la rúbrica" },
+        "description": { "type": "string", "description": "Orientaciones pedagógicas" },
+        "totalPoints": { "type": "number", "description": "Puntos totales posibles (ej: 100)" },
+        "isPublished": { "type": "boolean", "description": "Visibilidad para aprendices y evaluación" },
+        "evaluationCount": { "type": "number", "description": "Cantidad de evaluaciones realizadas" },
+        "criteria": { "type": "array", "description": "Lista de criterios y escalas de desempeño" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de creación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "fichaId", "createdBy", "title", "totalPoints", "criteria", "isPublished"]
+    },
+    "RubricEvaluation": {
+      "title": "RubricEvaluation",
+      "description": "Evaluación formativa desglosada por criterios vinculada a una entrega",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Identificador de la evaluación" },
+        "rubricId": { "type": "string", "description": "ID de la rúbrica aplicada" },
+        "rubricTitle": { "type": "string", "description": "Título de la rúbrica" },
+        "activityId": { "type": "string", "description": "ID de la actividad" },
+        "submissionId": { "type": "string", "description": "ID de la entrega evaluada" },
+        "learnerId": { "type": "string", "description": "UID del aprendiz" },
+        "learnerName": { "type": "string", "description": "Nombre del aprendiz" },
+        "fichaId": { "type": "string", "description": "ID de la ficha" },
+        "evaluatorId": { "type": "string", "description": "UID del instructor evaluador" },
+        "evaluatorName": { "type": "string", "description": "Nombre del instructor evaluador" },
+        "version": { "type": "number", "description": "Versión evaluada" },
+        "criteriaResults": { "type": "array", "description": "Desglose de resultados por criterio y nivel" },
+        "totalPoints": { "type": "number", "description": "Puntos acumulados obtenidos" },
+        "totalPossiblePoints": { "type": "number", "description": "Puntos máximos evaluados" },
+        "percentage": { "type": "number", "description": "Porcentaje obtenido [0-100]" },
+        "generalFeedback": { "type": "string", "description": "Retroalimentación complementaria" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de evaluación" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de actualización" }
+      },
+      "required": ["id", "rubricId", "activityId", "submissionId", "learnerId", "fichaId", "evaluatorId", "totalPoints", "percentage"]
+    },
+    "Resource": {
+      "title": "Resource",
+      "description": "Recurso y material didáctico pedagógico organizado por ámbito académico",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del recurso" },
+        "title": { "type": "string", "description": "Título del material pedagógico" },
+        "description": { "type": "string", "description": "Descripción e instrucciones del recurso" },
+        "resourceType": {
+          "type": "string",
+          "enum": ["PDF", "DOCUMENT", "PRESENTATION", "SPREADSHEET", "IMAGE", "VIDEO", "AUDIO", "YOUTUBE", "CANVA", "EXTERNAL_LINK", "DRIVE_FILE"],
+          "description": "Tipo de material"
+        },
+        "createdBy": { "type": "string", "description": "UID del instructor creador" },
+        "creatorName": { "type": "string", "description": "Nombre del instructor creador" },
+        "creatorEmail": { "type": "string", "description": "Correo institucional del creador" },
+        "centerId": { "type": "string", "description": "ID del centro formativo" },
+        "programId": { "type": "string", "description": "ID del programa" },
+        "fichaId": { "type": "string", "description": "ID de la ficha asignada" },
+        "courseId": { "type": "string", "description": "ID del curso formativo" },
+        "competencyId": { "type": "string", "description": "ID de la competencia" },
+        "learningOutcomeId": { "type": "string", "description": "ID del RAP formativo" },
+        "activityId": { "type": "string", "description": "ID de la actividad de aprendizaje" },
+        "driveFileId": { "type": "string", "description": "ID de archivo en Google Drive" },
+        "driveUrl": { "type": "string", "description": "Enlace web seguro a Google Drive" },
+        "externalUrl": { "type": "string", "description": "Enlace externo a YouTube, Canva o web" },
+        "fileName": { "type": "string", "description": "Nombre del archivo físico" },
+        "fileSize": { "type": "number", "description": "Tamaño del archivo en bytes" },
+        "mimeType": { "type": "string", "description": "Tipo MIME del archivo" },
+        "thumbnailUrl": { "type": "string", "description": "URL de miniatura o portada" },
+        "isPublished": { "type": "boolean", "description": "Estado de publicación" },
+        "status": { "type": "string", "enum": ["draft", "published", "archived"], "description": "Estado operativo del material" },
+        "visibility": {
+          "type": "string",
+          "enum": ["ALL", "PROGRAM", "FICHA", "COURSE", "COMPETENCY", "RAP", "ACTIVITY"],
+          "description": "Alcance de visibilidad para aprendices"
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Fecha de registro" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Fecha de última modificación" }
+      },
+      "required": ["id", "title", "resourceType", "createdBy", "isPublished", "status", "visibility"]
     }
   },
   "firestore": {
@@ -409,6 +623,46 @@
     "/learnerRecords/{recordId}": {
       "schema": { "$ref": "#/entities/LearnerRecord" },
       "description": "Seguimiento pedagógico y comportamental cualitativo"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Anuncios y novedades institucionales gestionados por instructores"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Notificaciones persistentes y alertas de eventos pedagógicos"
+    },
+    "/gamificationProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/GamificationProfile" },
+      "description": "Perfiles de gamificación y progreso en puntos XP"
+    },
+    "/gamificationEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/GamificationEvent" },
+      "description": "Historial inmutable de eventos de gamificación"
+    },
+    "/badges/{badgeId}": {
+      "schema": { "$ref": "#/entities/Badge" },
+      "description": "Catálogo institucional de insignias administrado por instructores"
+    },
+    "/achievements/{achievementId}": {
+      "schema": { "$ref": "#/entities/Achievement" },
+      "description": "Catálogo institucional de logros de aprendizaje"
+    },
+    "/userBadges/{userBadgeId}": {
+      "schema": { "$ref": "#/entities/UserBadge" },
+      "description": "Insignias oficiales otorgadas a aprendices"
+    },
+    "/rubrics/{rubricId}": {
+      "schema": { "$ref": "#/entities/Rubric" },
+      "description": "Rúbricas formativas institucionales con ponderación del 100% asociadas a actividades"
+    },
+    "/rubricEvaluations/{evaluationId}": {
+      "schema": { "$ref": "#/entities/RubricEvaluation" },
+      "description": "Evaluaciones de rúbrica desglosadas por criterio asociadas a entregas de aprendices"
+    },
+    "/resources/{resourceId}": {
+      "schema": { "$ref": "#/entities/Resource" },
+      "description": "Centro institucional de recursos y materiales pedagógicos organizado por jerarquía académica"
     }
   }
 }

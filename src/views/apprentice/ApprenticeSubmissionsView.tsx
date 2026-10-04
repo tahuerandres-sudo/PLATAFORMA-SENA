@@ -25,20 +25,24 @@ import {
   RefreshCw,
   Info,
   Calendar,
+  Sliders,
 } from 'lucide-react';
 import {
   AcademicSubmission,
   EvidenceActivity,
   SubmissionHistoryItem,
+  RubricEvaluation,
 } from '../../types/academic';
 import { submissionService } from '../../services/submissions/submissionService';
 import { activityService } from '../../services/academic/activityService';
+import { rubricService } from '../../services/academic/rubricService';
 import { getEvidenceTypeConfig } from '../../config/fileLimits';
 import { useAuth } from '../../hooks/useAuth';
 import { DriveConnectionStatus } from '../../components/evidence/DriveConnectionStatus';
 import { EvidenceUploader } from '../../components/evidence/EvidenceUploader';
 import { DriveUploadResult } from '../../services/drive/driveService';
 import { Modal } from '../../components/ui/Modal';
+import { RubricEvaluationViewModal } from '../../components/rubrics/RubricEvaluationViewModal';
 
 export const ApprenticeSubmissionsView: React.FC = () => {
   const { userProfile, currentUser } = useAuth();
@@ -47,6 +51,9 @@ export const ApprenticeSubmissionsView: React.FC = () => {
 
   const [submissions, setSubmissions] = useState<AcademicSubmission[]>([]);
   const [activities, setActivities] = useState<EvidenceActivity[]>([]);
+  const [evaluationsMap, setEvaluationsMap] = useState<Record<string, RubricEvaluation>>({});
+  const [selectedEvaluation, setSelectedEvaluation] = useState<RubricEvaluation | null>(null);
+  const [rubricModalOpen, setRubricModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'A' | 'N' | 'C' | 'pending'>('all');
@@ -73,8 +80,21 @@ export const ApprenticeSubmissionsView: React.FC = () => {
         submissionService.getSubmissionsByLearner(learnerId),
         activityService.getActivities(),
       ]);
-      setSubmissions(subsRes.data || []);
+      const loadedSubs = subsRes.data || [];
+      setSubmissions(loadedSubs);
       setActivities(actsRes.data || []);
+
+      // Cargar evaluaciones de rúbricas correspondientes a las entregas (Prompt 19)
+      const evals: Record<string, RubricEvaluation> = {};
+      for (const s of loadedSubs) {
+        try {
+          const ev = await rubricService.getRubricEvaluation(s.id, s.version || 1);
+          if (ev) evals[s.id] = ev;
+        } catch (e) {
+          // ignore
+        }
+      }
+      setEvaluationsMap(evals);
     } catch (err) {
       console.error('[ApprenticeSubmissionsView] Error cargando evidencias:', err);
     } finally {
@@ -495,6 +515,42 @@ export const ApprenticeSubmissionsView: React.FC = () => {
                   </div>
                 )}
 
+                {/* Banner de Evaluación Formativa por Rúbrica Pedagógica (Prompt 19) */}
+                {evaluationsMap[sub.id] && (
+                  <div className="p-3 bg-linear-to-r from-sky-50 via-teal-50 to-emerald-50 rounded-xl border border-sky-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-lg bg-sky-100/80 text-sky-800 shrink-0">
+                        <Sliders className="w-4 h-4 text-[#00324D]" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#00324D]">
+                            Evaluación por Rúbrica Pedagógica
+                          </span>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-[#2E8500] border border-emerald-300">
+                            {evaluationsMap[sub.id].percentage}% ({evaluationsMap[sub.id].totalPoints} / {evaluationsMap[sub.id].totalPossiblePoints} pts)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 mt-0.5 line-clamp-1">
+                          {evaluationsMap[sub.id].rubricTitle || 'Dictamen detallado de criterios formativos'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedEvaluation(evaluationsMap[sub.id]);
+                        setRubricModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0 flex items-center justify-center gap-1.5"
+                    >
+                      <Award className="w-3.5 h-3.5 text-[#8CE665]" />
+                      Ver Desglose de Rúbrica
+                    </button>
+                  </div>
+                )}
+
                 {/* Detalle de Archivo Físico o Enlace */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-50 p-3 rounded-lg border border-slate-100">
                   <div className="space-y-1 flex-1 min-w-0">
@@ -850,6 +906,19 @@ export const ApprenticeSubmissionsView: React.FC = () => {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Modal: Visualización de Evaluación por Rúbrica Pedagógica (Prompt 19) */}
+      {rubricModalOpen && selectedEvaluation && (
+        <RubricEvaluationViewModal
+          isOpen={rubricModalOpen}
+          onClose={() => {
+            setRubricModalOpen(false);
+            setSelectedEvaluation(null);
+          }}
+          evaluation={selectedEvaluation}
+          officialGrade={submissions.find((s) => s.id === selectedEvaluation.submissionId)?.grade}
+        />
       )}
     </div>
   );

@@ -27,7 +27,7 @@ import { useAuth } from '../../hooks/useAuth';
 
 export const InstructorCompetenciesView: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
-  const instructorUid = currentUser?.uid || userProfile?.uid || 'inst_carlos_mendoza';
+  const instructorUid = currentUser?.uid || userProfile?.uid || '';
 
   const [competencies, setCompetencies] = useState<Competency[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);

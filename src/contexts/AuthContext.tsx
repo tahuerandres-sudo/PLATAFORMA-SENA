@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, getRedirectResult, User as FirebaseUser } from 'firebase/auth';
 import { auth } from '../services/firebase/config';
 import {
   loginWithFirebase,
@@ -44,16 +44,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Único listener central onAuthStateChanged
+  // Único listener central onAuthStateChanged y captura de resultado de redirección
   useEffect(() => {
+    // Capturar resultado de redirección si se utilizó signInWithRedirect
+    getRedirectResult(auth)
+      .then(async (credential) => {
+        if (credential?.user) {
+          try {
+            const profile = await getUserProfileFromFirestore(credential.user);
+            setUserProfile(profile);
+          } catch (err: any) {
+            console.error('[Auth] Error al procesar perfil tras redirección:', err);
+            setAuthError(translateAuthError(err));
+          }
+        }
+      })
+      .catch((err: any) => {
+        if (err?.code) {
+          console.warn('[Auth] Error detectado en getRedirectResult:', err);
+          setAuthError(translateAuthError(err));
+        }
+      });
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
         try {
           const profile = await getUserProfileFromFirestore(user);
           setUserProfile(profile);
-        } catch (err) {
+        } catch (err: any) {
           console.error('[Auth] Error al cargar perfil:', err);
+          setAuthError(translateAuthError(err));
           setUserProfile(null);
         }
       } else {

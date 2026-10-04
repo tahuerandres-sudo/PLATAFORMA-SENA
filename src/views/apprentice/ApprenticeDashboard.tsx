@@ -18,10 +18,12 @@ import {
   AlertCircle,
   HelpCircle,
   CalendarCheck,
+  Calendar,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { getEnrollmentsForApprentice } from '../../services/firebase/academicService';
-import { EnrichedEnrollment } from '../../types/academic';
+import { EnrichedEnrollment, GamificationProfile } from '../../types/academic';
+import { gamificationService, calculateLevel } from '../../services/academic/gamificationService';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 
 interface ApprenticeDashboardProps {
@@ -35,6 +37,7 @@ export const ApprenticeDashboard: React.FC<ApprenticeDashboardProps> = ({
 }) => {
   const { currentUser, userProfile } = useAuth();
   const [enrollments, setEnrollments] = useState<EnrichedEnrollment[]>([]);
+  const [gamProfile, setGamProfile] = useState<GamificationProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -44,8 +47,12 @@ export const ApprenticeDashboard: React.FC<ApprenticeDashboardProps> = ({
       setLoading(true);
       setErrorMsg(null);
       try {
-        const list = await getEnrollmentsForApprentice(currentUser.uid);
+        const [list, prof] = await Promise.all([
+          getEnrollmentsForApprentice(currentUser.uid),
+          gamificationService.getProfile(currentUser.uid),
+        ]);
         setEnrollments(list);
+        setGamProfile(prof);
       } catch (err: any) {
         console.warn('[ApprenticeDashboard] Aviso al cargar enrollments:', err);
       } finally {
@@ -84,11 +91,15 @@ export const ApprenticeDashboard: React.FC<ApprenticeDashboardProps> = ({
           <div className="pt-3 flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 bg-slate-800/80 px-3.5 py-1.5 rounded-lg border border-slate-700 text-xs">
               <Flame className="w-4 h-4 text-amber-400 fill-amber-400" />
-              <span className="font-bold text-amber-300">Racha: 1 día</span>
+              <span className="font-bold text-amber-300">
+                Racha: {gamProfile?.currentStreak || 1} {gamProfile?.currentStreak === 1 ? 'día' : 'días'}
+              </span>
             </div>
             <div className="flex items-center gap-2 bg-slate-800/80 px-3.5 py-1.5 rounded-lg border border-slate-700 text-xs">
               <Trophy className="w-4 h-4 text-amber-400" />
-              <span className="font-bold text-white">Nivel 1 · Aprendiz</span>
+              <span className="font-bold text-white">
+                Nivel {calculateLevel(gamProfile?.experiencePoints || 0).level} · {calculateLevel(gamProfile?.experiencePoints || 0).title}
+              </span>
             </div>
           </div>
         </div>
@@ -138,25 +149,47 @@ export const ApprenticeDashboard: React.FC<ApprenticeDashboardProps> = ({
       ) : (
         /* Datos Académicos Reales del Aprendiz desde Firestore */
         <div className="space-y-6">
-          {/* Acceso Rápido a Asistencia y Justificaciones (Módulo 6) */}
-          <div className="bg-linear-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#39A900] text-white flex items-center justify-center font-bold shrink-0 shadow-xs">
-                <CalendarCheck className="w-5 h-5" />
+          {/* Accesos Rápidos: Asistencia y Calendario Académico */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-linear-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#39A900] text-white flex items-center justify-center font-bold shrink-0 shadow-xs">
+                  <CalendarCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[#00324D]">Control de Asistencia y Justificaciones</h4>
+                  <p className="text-[11px] text-slate-600 line-clamp-1">
+                    Consulta asistencias diarias, llamados y justifica inasistencias.
+                  </p>
+                </div>
               </div>
-              <div>
-                <h4 className="text-xs font-bold text-[#00324D]">Control de Asistencia y Justificaciones</h4>
-                <p className="text-[11px] text-slate-600">
-                  Consulta tus asistencias diarias, actas oficiales de llamados de atención y radica tus justificaciones formales.
-                </p>
-              </div>
+              <button
+                onClick={() => onNavigate('attendance_tracking')}
+                className="px-3 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer self-start sm:self-auto"
+              >
+                Ver Asistencia →
+              </button>
             </div>
-            <button
-              onClick={() => onNavigate('attendance_tracking')}
-              className="px-3.5 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer self-start sm:self-auto"
-            >
-              Ver Mi Asistencia →
-            </button>
+
+            <div className="bg-linear-to-r from-sky-50 via-indigo-50 to-emerald-50 border border-sky-200 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#00324D] text-[#39A900] flex items-center justify-center font-bold shrink-0 shadow-xs">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[#00324D]">Calendario Académico y Agenda</h4>
+                  <p className="text-[11px] text-slate-600 line-clamp-1">
+                    Actividades asignadas, fechas límite y avisos en un solo lugar.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => onNavigate('calendar')}
+                className="px-3 py-1.5 bg-[#39A900] hover:bg-[#2d8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer self-start sm:self-auto"
+              >
+                Ver Calendario →
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

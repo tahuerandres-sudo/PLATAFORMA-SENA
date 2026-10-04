@@ -279,14 +279,15 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
                       <StatusBadge status={apprentice.status} size="sm" />
                     </td>
 
-                    {/* Botón Ver Perfil */}
+                    {/* Botón Ver Expediente Digital */}
                     <td className="p-3 text-right">
                       <button
                         onClick={() => setSelectedApprentice(apprentice)}
-                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] hover:text-[#2E8500] rounded-lg font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] hover:text-[#2E8500] rounded-lg font-bold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                        title="Consultar Expediente Académico Digital"
                       >
                         <Eye className="w-3.5 h-3.5" />
-                        Perfil
+                        Expediente
                       </button>
                     </td>
                   </tr>
@@ -342,7 +343,7 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
                   className="w-full py-2 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  Ver Perfil Académico Completo
+                  Ver Expediente Académico Digital
                 </button>
               </div>
             ))}

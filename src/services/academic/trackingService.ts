@@ -42,6 +42,7 @@ import {
 import { notificationService } from './notificationService';
 import { fichaService } from './fichaService';
 import { submissionService } from '../submissions/submissionService';
+import { gamificationService } from './gamificationService';
 
 // Helper para sanitizar objetos y prevenir errores de campos 'undefined' en Firestore setDoc
 function cleanUndefined<T extends Record<string, any>>(obj: T): T {
@@ -211,6 +212,36 @@ export const trackingService = {
       await setDoc(doc(db, FIRESTORE_COLLECTIONS.ATTENDANCE, recordId), cleanUndefined(record), { merge: true });
     } catch (err) {
       console.warn('[trackingService] Aviso guardando asistencia en Firestore:', err);
+    }
+
+    // PROMPT 14 - Evento Gamificación E: Asistencia puntual (+5 XP)
+    if (payload.status === 'PRESENTE') {
+      gamificationService
+        .onAttendanceRecorded({
+          attendanceId: recordId,
+          userId: effectiveUserId,
+          status: payload.status,
+          date: payload.date,
+        })
+        .catch((e) => console.warn('[trackingService] Error en gamificación de asistencia:', e));
+    }
+
+    // PROMPT 16 - Evento Asistencia: Notificar al aprendiz sobre ausencia o tardanza
+    if (
+      payload.status === 'absent' ||
+      payload.status === 'AUSENTE' ||
+      payload.status === 'late' ||
+      payload.status === 'TARDE'
+    ) {
+      notificationService
+        .notifyAttendance({
+          attendanceId: recordId,
+          userId: effectiveUserId,
+          status: payload.status,
+          date: payload.date,
+          fichaId: payload.fichaId,
+        })
+        .catch((e) => console.warn('[trackingService] Error notificando asistencia a aprendiz:', e));
     }
 
     let createdCall: AttentionCall | undefined = undefined;
@@ -730,6 +761,18 @@ export const trackingService = {
       await this.updateAttentionCallStatus(finalJust.attentionCallId, 'EN_REVISION');
     }
 
+    // PROMPT 16 - Evento Académico: Notificar al instructor sobre justificación radicada
+    notificationService
+      .notifyJustificationReceived({
+        justificationId: finalJust.id,
+        apprenticeId: finalJust.userId,
+        apprenticeName: finalJust.learnerName,
+        attendanceDate: finalJust.date,
+        reason: finalJust.reason,
+        fichaId: finalJust.fichaId,
+      })
+      .catch((e) => console.warn('[trackingService] Error notificando justificación al instructor:', e));
+
     return finalJust;
   },
 
@@ -828,19 +871,14 @@ export const trackingService = {
       }
     }
 
-    // 3. Notificar al aprendiz sobre el resultado de su justificación
+    // 3. Notificar al aprendiz sobre el resultado de su justificación (PROMPT 16: JUSTIFICATION_APPROVED)
     if (just) {
       try {
-        await notificationService.sendNotification({
-          recipientUserId: just.userId,
-          title: `Justificación ${status === 'ACEPTADA' ? 'Aprobada' : 'Rechazada'}`,
-          description: reviewComment
-            ? `Dictamen: ${reviewComment}`
-            : status === 'ACEPTADA'
-            ? 'Tu justificación fue aceptada por el instructor. Se actualizó tu estado de asistencia.'
-            : 'Tu justificación no fue aceptada. Contacta al instructor para más detalles.',
-          type: 'justification',
-          relatedId: justificationId,
+        await notificationService.notifyJustificationApproved({
+          justificationId,
+          apprenticeId: just.userId,
+          status,
+          reviewComment,
         });
       } catch (err) {
         console.warn('[trackingService] Error notificando dictamen de justificación:', err);

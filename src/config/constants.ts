@@ -54,6 +54,10 @@ export const FIRESTORE_COLLECTIONS = {
   GAMIFICATION: 'gamification',
   BADGES: 'badges',
   AUDIT_LOGS: 'auditLogs',
+  RUBRICS: 'rubrics',
+  RUBRIC_CRITERIA: 'rubricCriteria',
+  RUBRIC_EVALUATIONS: 'rubricEvaluations',
+  RESOURCES: 'resources',
 } as const;
 
 /**

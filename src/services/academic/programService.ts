@@ -16,13 +16,14 @@ import {
 import { db } from '../firebase/config';
 import { FIRESTORE_COLLECTIONS } from '../../config/constants';
 import { TrainingProgram } from '../../types/academic';
-import { DEMO_PROGRAMS } from '../../data/academicMockData';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.TRAINING_PROGRAMS;
 
+let inMemoryPrograms: TrainingProgram[] = [];
+
 export const programService = {
   /**
-   * Obtiene todos los programas de formación
+   * Obtiene todos los programas de formación desde Firestore
    */
   async getPrograms(centerId?: string): Promise<{ data: TrainingProgram[]; isDemo: boolean }> {
     try {
@@ -33,40 +34,71 @@ export const programService = {
 
       if (!snap.empty) {
         const programs = snap.docs.map((d) => d.data() as TrainingProgram);
-        return { data: programs, isDemo: false };
+        const map = new Map<string, TrainingProgram>();
+        programs.forEach((p) => map.set(p.id, p));
+        inMemoryPrograms.forEach((p) => {
+          if (!map.has(p.id)) map.set(p.id, p);
+        });
+        const combined = Array.from(map.values());
+        const filtered = centerId ? combined.filter((p) => p.centerId === centerId) : combined;
+        return { data: filtered, isDemo: false };
       }
     } catch (error) {
-      console.warn('[programService] Lectura de Firestore, usando datos base:', error);
+      console.warn('[programService] Lectura de Firestore en trainingPrograms:', error);
     }
+
     const filtered = centerId
-      ? DEMO_PROGRAMS.filter((p) => p.centerId === centerId)
-      : DEMO_PROGRAMS;
-    return { data: filtered, isDemo: true };
+      ? inMemoryPrograms.filter((p) => p.centerId === centerId)
+      : inMemoryPrograms;
+    return { data: filtered, isDemo: false };
   },
 
   /**
    * Obtiene un programa de formación por ID
    */
   async getProgramById(id: string): Promise<TrainingProgram | null> {
+    const memoryFound = inMemoryPrograms.find((p) => p.id === id);
+    if (memoryFound) return memoryFound;
+
     try {
       const snap = await getDoc(doc(db, COLLECTION, id));
       if (snap.exists()) {
-        return snap.data() as TrainingProgram;
+        const prog = snap.data() as TrainingProgram;
+        if (!inMemoryPrograms.some((p) => p.id === prog.id)) {
+          inMemoryPrograms.push(prog);
+        }
+        return prog;
       }
     } catch (error) {
       console.warn(`[programService] Programa ${id} no encontrado en Firestore:`, error);
     }
-    const found = DEMO_PROGRAMS.find((p) => p.id === id);
-    return found || null;
+    return null;
   },
 
   /**
-   * Guarda o actualiza un programa
+   * Guarda o actualiza un programa en Firestore y memoria
    */
-  async saveProgram(program: TrainingProgram): Promise<void> {
-    await setDoc(doc(db, COLLECTION, program.id), {
+  async saveProgram(program: TrainingProgram): Promise<TrainingProgram> {
+    const now = new Date().toISOString();
+    const updated: TrainingProgram = {
       ...program,
-      updatedAt: new Date().toISOString(),
-    });
+      createdAt: program.createdAt || now,
+      updatedAt: now,
+    };
+
+    const idx = inMemoryPrograms.findIndex((p) => p.id === program.id);
+    if (idx !== -1) {
+      inMemoryPrograms[idx] = updated;
+    } else {
+      inMemoryPrograms = [updated, ...inMemoryPrograms];
+    }
+
+    try {
+      await setDoc(doc(db, COLLECTION, program.id), updated, { merge: true });
+    } catch (err) {
+      console.warn('[programService] Aviso al persistir programa en Firestore:', err);
+    }
+
+    return updated;
   },
 };

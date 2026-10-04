@@ -35,6 +35,8 @@ import {
   ChevronRight,
   TrendingUp,
   SlidersHorizontal,
+  Sliders,
+  Info,
 } from 'lucide-react';
 import {
   AcademicSubmission,
@@ -47,9 +49,16 @@ import {
   Competency,
   LearningOutcome,
   SubmissionHistoryItem,
+  Rubric,
+  RubricEvaluation,
+  RubricCriterionResult,
 } from '../../types/academic';
 import { submissionService } from '../../services/submissions/submissionService';
 import { activityService } from '../../services/academic/activityService';
+import { rubricService } from '../../services/academic/rubricService';
+import { RubricEvaluationForm } from '../../components/rubrics/RubricEvaluationForm';
+import { RubricEvaluationViewModal } from '../../components/rubrics/RubricEvaluationViewModal';
+import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
 import {
   getFichasForInstructor,
   getTrainingPrograms,
@@ -110,6 +119,20 @@ export const InstructorSubmissionsView: React.FC = () => {
   const [feedbackInput, setFeedbackInput] = useState('');
   const [isSavingGrade, setIsSavingGrade] = useState(false);
 
+  // Estados para Rúbricas Pedagógicas (Prompt 19)
+  const [activeGradingTab, setActiveGradingTab] = useState<'official' | 'rubric'>('official');
+  const [currentRubric, setCurrentRubric] = useState<Rubric | null>(null);
+  const [loadingRubric, setLoadingRubric] = useState(false);
+  const [rubricResults, setRubricResults] = useState<{
+    criteriaResults: RubricCriterionResult[];
+    totalPoints: number;
+    totalPossiblePoints: number;
+    percentage: number;
+  } | null>(null);
+  const [evaluationsMap, setEvaluationsMap] = useState<Record<string, RubricEvaluation>>({});
+  const [rubricViewModalOpen, setRubricViewModalOpen] = useState(false);
+  const [selectedRubricEvaluation, setSelectedRubricEvaluation] = useState<RubricEvaluation | null>(null);
+
   // Mensaje flotante de confirmación rápida
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -133,13 +156,26 @@ export const InstructorSubmissionsView: React.FC = () => {
           learningOutcomeService.getLearningOutcomes(),
         ]);
 
-      setSubmissions(subsRes.data || []);
+      const loadedSubs = subsRes.data || [];
+      setSubmissions(loadedSubs);
       setActivities(actsRes.data || []);
       setFichas(fichasRes || []);
       setPrograms(progsRes || []);
       setCourses(coursesRes || []);
       setCompetencies(compsRes.data || []);
       setLearningOutcomes(outRes.data || []);
+
+      // Cargar evaluaciones de rúbricas existentes
+      const evals: Record<string, RubricEvaluation> = {};
+      for (const s of loadedSubs) {
+        try {
+          const ev = await rubricService.getRubricEvaluation(s.id, s.version || 1);
+          if (ev) evals[s.id] = ev;
+        } catch (e) {
+          // ignore
+        }
+      }
+      setEvaluationsMap(evals);
     } catch (err) {
       console.warn('[InstructorSubmissionsView] Aviso cargando entregas:', err);
     } finally {
@@ -150,6 +186,50 @@ export const InstructorSubmissionsView: React.FC = () => {
   useEffect(() => {
     loadData();
   }, [instructorUid]);
+
+  // Cargar rúbrica y evaluación para la entrega seleccionada en el modal de calificación
+  useEffect(() => {
+    async function loadRubricForGrading() {
+      if (!selectedSubmission || !gradingModalOpen) {
+        setCurrentRubric(null);
+        setRubricResults(null);
+        setActiveGradingTab('official');
+        return;
+      }
+      setLoadingRubric(true);
+      try {
+        const act = activities.find((a) => a.id === selectedSubmission.activityId);
+        let rub: Rubric | null = null;
+        if (act?.rubricId) {
+          rub = await rubricService.getRubric(act.rubricId);
+        }
+        if (!rub) {
+          rub = await rubricService.getRubricByActivity(selectedSubmission.activityId);
+        }
+        setCurrentRubric(rub);
+
+        const existingEval = evaluationsMap[selectedSubmission.id] || (await rubricService.getRubricEvaluation(
+          selectedSubmission.id,
+          selectedSubmission.version || 1
+        ));
+        if (existingEval) {
+          setRubricResults({
+            criteriaResults: existingEval.criteriaResults,
+            totalPoints: existingEval.totalPoints,
+            totalPossiblePoints: existingEval.totalPossiblePoints,
+            percentage: existingEval.percentage,
+          });
+        } else {
+          setRubricResults(null);
+        }
+      } catch (err) {
+        console.warn('[InstructorSubmissionsView] Error cargando rúbrica para entrega:', err);
+      } finally {
+        setLoadingRubric(false);
+      }
+    }
+    loadRubricForGrading();
+  }, [selectedSubmission, gradingModalOpen, activities]);
 
   // Mapas para correlación rápida de relaciones curriculares (Sección 9 y 10)
   const activityMap = useMemo(() => {
@@ -372,12 +452,46 @@ export const InstructorSubmissionsView: React.FC = () => {
     setIsSavingGrade(true);
 
     try {
+      let rubricEvalId: string | undefined;
+      let rubricScore: number | undefined;
+      let rubricMaxScore: number | undefined;
+      let rubricPercentage: number | undefined;
+
+      if (currentRubric && rubricResults && rubricResults.criteriaResults.length > 0) {
+        try {
+          const evalRes = await rubricService.evaluateSubmissionWithRubric({
+            rubricId: currentRubric.id,
+            activityId: selectedSubmission.activityId,
+            submissionId: selectedSubmission.id,
+            learnerId: selectedSubmission.learnerId || selectedSubmission.userId,
+            learnerName: selectedSubmission.learnerName,
+            fichaId: selectedSubmission.fichaId,
+            evaluatorId: instructorUid,
+            evaluatorName: instructorName,
+            version: selectedSubmission.version || 1,
+            criteriaResults: rubricResults.criteriaResults,
+            generalFeedback: feedbackInput.trim(),
+          });
+          rubricEvalId = evalRes.id;
+          rubricScore = evalRes.totalPoints;
+          rubricMaxScore = evalRes.totalPossiblePoints;
+          rubricPercentage = evalRes.percentage;
+          setEvaluationsMap((prev) => ({ ...prev, [selectedSubmission.id]: evalRes }));
+        } catch (rubErr) {
+          console.warn('[InstructorSubmissionsView] Error guardando evaluación de rúbrica:', rubErr);
+        }
+      }
+
       const updated = await submissionService.gradeSubmission({
         submissionId: selectedSubmission.id,
         gradeCode: selectedGradeCode,
         feedback: feedbackInput.trim(),
         instructorId: instructorUid,
         instructorName,
+        rubricEvaluationId: rubricEvalId,
+        rubricScore,
+        rubricMaxScore,
+        rubricPercentage,
       });
 
       if (updated) {
@@ -392,7 +506,7 @@ export const InstructorSubmissionsView: React.FC = () => {
             : selectedGradeCode === 'N'
             ? 'N — No aprobado'
             : 'C — Corregir'
-        }`
+        }${rubricResults ? ` · Rúbrica (${rubricResults.percentage}%)` : ''}`
       );
     } catch (err) {
       console.warn('[InstructorSubmissionsView] Error guardando calificación:', err);
@@ -1017,9 +1131,25 @@ export const InstructorSubmissionsView: React.FC = () => {
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-600">
-                                <Clock className="w-3 h-3 text-slate-400" />
+                                <Clock className="w-3.5 h-3.5 text-slate-400" />
                                 Pendiente
                               </span>
+                            )}
+
+                            {/* Evaluación de Rúbrica Pedagógica si existe (Prompt 19) */}
+                            {evaluationsMap[sub.id] && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedRubricEvaluation(evaluationsMap[sub.id]);
+                                  setRubricViewModalOpen(true);
+                                }}
+                                className="mt-1 flex items-center gap-1 text-[10px] font-bold text-[#00324D] bg-sky-50 hover:bg-sky-100 border border-sky-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                                title="Ver desglose pedagógico de rúbrica"
+                              >
+                                <Sliders className="w-3 h-3 text-[#39A900]" />
+                                <span>Rúbrica {evaluationsMap[sub.id].percentage}%</span>
+                              </button>
                             )}
                           </td>
 
@@ -1091,6 +1221,19 @@ export const InstructorSubmissionsView: React.FC = () => {
                               >
                                 <MessageSquare className="w-3.5 h-3.5 text-[#8CE665]" />
                                 Feedback
+                              </button>
+
+                              {/* Calificar con Rúbrica Pedagógica (Prompt 19) */}
+                              <button
+                                onClick={() => {
+                                  handleOpenGrading(sub, (sub.grade as AcademicGradeCode) || 'A');
+                                  setActiveGradingTab('rubric');
+                                }}
+                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-emerald-200 rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1"
+                                title="Evaluar con Rúbrica Pedagógica"
+                              >
+                                <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
+                                Rúbrica
                               </button>
 
                               {/* Drive link */}
@@ -1241,91 +1384,308 @@ export const InstructorSubmissionsView: React.FC = () => {
           }
         >
           <div className="space-y-4">
-            {/* Banner de Atajos de Teclado (Sección 6) */}
-            <div className="bg-slate-100 p-2.5 rounded-lg border border-slate-200 flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-                ⌨️ Atajos de teclado:
-              </span>
-              <div className="flex items-center gap-2 font-mono text-[11px] font-bold text-slate-800">
-                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">A = Aprobar</span>
-                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">N = No aprobar</span>
-                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">C = Corregir</span>
-              </div>
-            </div>
-
-            {/* Selector de Dictamen A / N / C */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-800 mb-2">
-                Dictamen Oficial SENA *
-              </label>
-              <div className="grid grid-cols-3 gap-2.5">
-                {/* [ A ] */}
+            {/* Pestañas de Evaluación si la actividad tiene Rúbrica Pedagógica (Prompt 19) */}
+            {currentRubric && (
+              <div className="flex border-b border-slate-200 gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedGradeCode('A')}
-                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                    selectedGradeCode === 'A'
-                      ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                  onClick={() => setActiveGradingTab('official')}
+                  className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                    activeGradingTab === 'official'
+                      ? 'border-[#39A900] text-[#00324D]'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  <div className="text-xl font-black">A</div>
-                  <div className="text-xs font-bold">APROBADO</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
+                  <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                  <span>Dictamen Oficial A/N/C</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-black">
+                    {selectedGradeCode}
+                  </span>
                 </button>
-
-                {/* [ N ] */}
                 <button
                   type="button"
-                  onClick={() => setSelectedGradeCode('N')}
-                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                    selectedGradeCode === 'N'
-                      ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                  onClick={() => setActiveGradingTab('rubric')}
+                  className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                    activeGradingTab === 'rubric'
+                      ? 'border-[#39A900] text-[#00324D]'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  <div className="text-xl font-black">N</div>
-                  <div className="text-xs font-bold">NO APROBADO</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
-                </button>
-
-                {/* [ C ] */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedGradeCode('C')}
-                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                    selectedGradeCode === 'C'
-                      ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                  }`}
-                >
-                  <div className="text-xl font-black">C</div>
-                  <div className="text-xs font-bold">CORREGIR</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
+                  <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
+                  <span>Rúbrica Pedagógica</span>
+                  {rubricResults ? (
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                      {rubricResults.percentage}%
+                    </span>
+                  ) : (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
+                      Por evaluar
+                    </span>
+                  )}
                 </button>
               </div>
-            </div>
+            )}
 
-            {/* Retroalimentación formativa obligatoria para C o recomendada */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-800 mb-1">
-                Retroalimentación del Instructor (Feedback) {selectedGradeCode === 'C' && '*'}
-              </label>
-              <textarea
-                rows={4}
-                value={feedbackInput}
-                onChange={(e) => setFeedbackInput(e.target.value)}
-                placeholder={
-                  selectedGradeCode === 'C'
-                    ? 'Indica con claridad qué aspectos debe corregir el aprendiz para que pueda reenviar la evidencia...'
-                    : 'Observaciones pedagógicas cualitativas para el aprendiz...'
-                }
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white leading-relaxed"
-              />
-              <span className="text-[10.5px] text-slate-400 mt-1 block">
-                Esta retroalimentación quedará registrada en Firestore y será visible de inmediato en el perfil del aprendiz.
-              </span>
-            </div>
+            {activeGradingTab === 'rubric' && currentRubric ? (
+              <div className="space-y-4">
+                <RubricEvaluationForm
+                  rubric={currentRubric}
+                  initialResults={rubricResults?.criteriaResults}
+                  onResultsChange={(res) => {
+                    setRubricResults(res);
+                    // PROMPT 19.1: La rúbrica genera sugerencia pedagógica orientativa pero NUNCA modifica automáticamente el dictamen oficial A/N/C.
+                    // El instructor conserva en todo momento la decisión final.
+                  }}
+                />
+
+                {/* Panel de Puntos, Porcentaje, Sugerencia Pedagógica y Dictamen Oficial (Prompt 19.1 - Requisitos 3 y 4) */}
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Puntaje Obtenido
+                      </span>
+                      <div className="flex items-baseline gap-1 text-slate-900">
+                        <span className="text-2xl font-black text-[#2E8500]">
+                          {rubricResults?.totalPoints || 0}
+                        </span>
+                        <span className="text-xs font-bold text-slate-500">
+                          / {rubricResults?.totalPossiblePoints || currentRubric.totalPoints} pts
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Porcentaje
+                      </span>
+                      <span className="text-2xl font-black text-[#00324D]">
+                        {rubricResults?.percentage || 0}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Sugerencia Pedagógica Informativa */}
+                  <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-blue-950">
+                      <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Sugerencia pedagógica orientativa:</span>
+                    </div>
+                    <p className="text-[11px] text-blue-900 leading-relaxed">
+                      {rubricResults
+                        ? rubricResults.percentage >= 70
+                          ? 'Desempeño formativo acorde con los estándares esperados (Referencia orientativa: Cumple con los criterios de evaluación formativos).'
+                          : rubricResults.percentage >= 50
+                          ? 'Se identifican aspectos específicos por fortalecer (Referencia orientativa: Oportunidad de corrección o ajuste puntual).'
+                          : 'Criterios mínimos aún no alcanzados (Referencia orientativa: No cumple con los requerimientos esenciales).'
+                        : 'Califica los criterios en la rúbrica arriba para obtener una orientación formativa.'}
+                    </p>
+                    <p className="text-[10px] text-blue-800 italic pt-1 border-t border-blue-100">
+                      * Nota institucional: Esta sugerencia es meramente formativa. El instructor debe seleccionar explícitamente el Resultado Oficial SENA a continuación.
+                    </p>
+                  </div>
+
+                  {/* Selector Explícito de Dictamen Oficial SENA [ A ] [ N ] [ C ] */}
+                  <div className="space-y-2 pt-1 border-t border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-bold text-slate-800">
+                        Resultado Oficial SENA *
+                      </label>
+                      <span className="text-xs font-bold text-slate-600">
+                        Seleccionado:{' '}
+                        <strong
+                          className={
+                            selectedGradeCode === 'A'
+                              ? 'text-[#2E8500]'
+                              : selectedGradeCode === 'C'
+                              ? 'text-amber-700'
+                              : 'text-rose-600'
+                          }
+                        >
+                          {selectedGradeCode === 'A'
+                            ? 'A (Aprobado)'
+                            : selectedGradeCode === 'C'
+                            ? 'C (Por corregir)'
+                            : 'N (No aprobado)'}
+                        </strong>
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {/* [ A ] */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGradeCode('A')}
+                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                          selectedGradeCode === 'A'
+                            ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
+                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                        }`}
+                      >
+                        <div className="text-xl font-black">A</div>
+                        <div className="text-xs font-bold">APROBADO</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
+                      </button>
+
+                      {/* [ N ] */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGradeCode('N')}
+                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                          selectedGradeCode === 'N'
+                            ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
+                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                        }`}
+                      >
+                        <div className="text-xl font-black">N</div>
+                        <div className="text-xs font-bold">NO APROBADO</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
+                      </button>
+
+                      {/* [ C ] */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGradeCode('C')}
+                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                          selectedGradeCode === 'C'
+                            ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
+                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                        }`}
+                      >
+                        <div className="text-xl font-black">C</div>
+                        <div className="text-xs font-bold">CORREGIR</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Retroalimentación en la pestaña de rúbrica */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-800 mb-1">
+                      Retroalimentación General del Instructor {selectedGradeCode === 'C' && '*'}
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={feedbackInput}
+                      onChange={(e) => setFeedbackInput(e.target.value)}
+                      placeholder={
+                        selectedGradeCode === 'C'
+                          ? 'Indica con claridad qué aspectos debe corregir el aprendiz para su nueva entrega...'
+                          : 'Comentarios formativos adicionales para el aprendiz...'
+                      }
+                      className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#39A900] text-slate-800 bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Banner de Atajos de Teclado (Sección 6) */}
+                <div className="bg-slate-100 p-2.5 rounded-lg border border-slate-200 flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                    ⌨️ Atajos de teclado:
+                  </span>
+                  <div className="flex items-center gap-2 font-mono text-[11px] font-bold text-slate-800">
+                    <span className="bg-white px-2 py-0.5 rounded border border-slate-300">A = Aprobar</span>
+                    <span className="bg-white px-2 py-0.5 rounded border border-slate-300">N = No aprobar</span>
+                    <span className="bg-white px-2 py-0.5 rounded border border-slate-300">C = Corregir</span>
+                  </div>
+                </div>
+
+                {/* Si la actividad tiene rúbrica y ya tiene puntaje */}
+                {rubricResults && (
+                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sliders className="w-4 h-4 text-[#00324D]" />
+                      <span className="text-slate-800">
+                        Evaluación con Rúbrica: <strong>{rubricResults.percentage}%</strong> ({rubricResults.totalPoints}/{rubricResults.totalPossiblePoints} pts)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveGradingTab('rubric')}
+                      className="text-[11px] font-bold text-sky-800 hover:underline"
+                    >
+                      Ajustar criterios
+                    </button>
+                  </div>
+                )}
+
+                {/* Selector de Dictamen A / N / C */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-800 mb-2">
+                    Dictamen Oficial SENA *
+                  </label>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {/* [ A ] */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGradeCode('A')}
+                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                        selectedGradeCode === 'A'
+                          ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
+                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                      }`}
+                    >
+                      <div className="text-xl font-black">A</div>
+                      <div className="text-xs font-bold">APROBADO</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
+                    </button>
+
+                    {/* [ N ] */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGradeCode('N')}
+                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                        selectedGradeCode === 'N'
+                          ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
+                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                      }`}
+                    >
+                      <div className="text-xl font-black">N</div>
+                      <div className="text-xs font-bold">NO APROBADO</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
+                    </button>
+
+                    {/* [ C ] */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGradeCode('C')}
+                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                        selectedGradeCode === 'C'
+                          ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
+                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                      }`}
+                    >
+                      <div className="text-xl font-black">C</div>
+                      <div className="text-xs font-bold">CORREGIR</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Retroalimentación formativa obligatoria para C o recomendada */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-800 mb-1">
+                    Retroalimentación del Instructor (Feedback) {selectedGradeCode === 'C' && '*'}
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={feedbackInput}
+                    onChange={(e) => setFeedbackInput(e.target.value)}
+                    placeholder={
+                      selectedGradeCode === 'C'
+                        ? 'Indica con claridad qué aspectos debe corregir el aprendiz para que pueda reenviar la evidencia...'
+                        : 'Observaciones pedagógicas cualitativas para el aprendiz...'
+                    }
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white leading-relaxed"
+                  />
+                  <span className="text-[10.5px] text-slate-400 mt-1 block">
+                    Esta retroalimentación quedará registrada en Firestore y será visible de inmediato en el perfil del aprendiz.
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       )}
@@ -1592,6 +1952,18 @@ export const InstructorSubmissionsView: React.FC = () => {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Modal: Consulta Detallada de Evaluación por Rúbrica Pedagógica (Prompt 19) */}
+      {rubricViewModalOpen && selectedRubricEvaluation && (
+        <RubricEvaluationViewModal
+          isOpen={rubricViewModalOpen}
+          onClose={() => {
+            setRubricViewModalOpen(false);
+            setSelectedRubricEvaluation(null);
+          }}
+          evaluation={selectedRubricEvaluation}
+        />
       )}
     </div>
   );

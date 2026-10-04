@@ -164,6 +164,53 @@ export const driveFolderService = {
   },
 
   /**
+   * Jerarquía para Recursos y Materiales Pedagógicos (Prompt 20 - Requisito 6):
+   * SENA Learning Hub / Recursos / [Programa] / Ficha [Num] / [Curso]
+   */
+  async getOrCreateResourceFolderHierarchy(params: {
+    programName?: string;
+    fichaNumber?: string;
+    courseName?: string;
+  }): Promise<FolderPathInfo> {
+    const { programName, fichaNumber, courseName } = params;
+
+    // 1. Carpeta Raíz: "SENA Learning Hub"
+    const rootId = await this.getOrCreateFolder(ROOT_FOLDER_NAME);
+
+    // 2. Carpeta General "Recursos"
+    const recursosFolderId = await this.getOrCreateFolder('Recursos', rootId);
+
+    let currentFolderId = recursosFolderId;
+    let structuredPath = `${ROOT_FOLDER_NAME} / Recursos`;
+
+    // 3. Carpeta de Programa (si aplica)
+    if (programName && programName.trim()) {
+      const cleanProgram = programName.trim();
+      currentFolderId = await this.getOrCreateFolder(cleanProgram, currentFolderId);
+      structuredPath += ` / ${cleanProgram}`;
+    }
+
+    // 4. Carpeta de Ficha (si aplica)
+    if (fichaNumber && fichaNumber.trim()) {
+      const fichaFolderName = `Ficha ${fichaNumber.trim()}`;
+      currentFolderId = await this.getOrCreateFolder(fichaFolderName, currentFolderId);
+      structuredPath += ` / ${fichaFolderName}`;
+    }
+
+    // 5. Carpeta de Curso (si aplica)
+    if (courseName && courseName.trim()) {
+      const cleanCourse = courseName.trim();
+      currentFolderId = await this.getOrCreateFolder(cleanCourse, currentFolderId);
+      structuredPath += ` / ${cleanCourse}`;
+    }
+
+    return {
+      folderId: currentFolderId,
+      structuredPath,
+    };
+  },
+
+  /**
    * Limpia la memoria caché de carpetas
    */
   clearCache(): void {

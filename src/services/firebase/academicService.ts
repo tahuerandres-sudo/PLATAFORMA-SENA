@@ -105,7 +105,7 @@ export async function getTrainingPrograms(centerId?: string): Promise<TrainingPr
   } catch (error) {
     console.warn('[AcademicService] Lectura de trainingPrograms en Firestore:', error);
   }
-  return DEMO_PROGRAMS;
+  return [];
 }
 
 export async function getTrainingProgramById(programId: string): Promise<TrainingProgram | null> {
@@ -118,8 +118,7 @@ export async function getTrainingProgramById(programId: string): Promise<Trainin
   } catch (error) {
     console.warn('[AcademicService] Lectura de TrainingProgram en Firestore:', error);
   }
-  const demo = DEMO_PROGRAMS.find((p: TrainingProgram) => p.id === programId || p.code === programId);
-  return demo || DEMO_PROGRAMS[0] || null;
+  return null;
 }
 
 // ==========================================

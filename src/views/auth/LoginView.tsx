@@ -210,31 +210,33 @@ export const LoginView: React.FC<LoginViewProps> = ({ onNavigateToRegister }) =>
             </button>
           </div>
 
-          {/* Panel de prueba rápida para evaluación (TEST 1 a 10) */}
-          <div className="pt-4 border-t border-slate-100 bg-slate-50/80 -mx-6 -mb-8 p-4 rounded-b-2xl border-x-0 border-b-0 space-y-2 text-xs">
-            <div className="font-semibold text-slate-500 text-[11px] flex items-center justify-between">
-              <span>Atajos de prueba rápida (Demo):</span>
-              <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                PROMPT 2
-              </span>
+          {/* Panel de prueba rápida para evaluación (solo visible en entorno local de desarrollo) */}
+          {import.meta.env.DEV && (
+            <div className="pt-4 border-t border-slate-100 bg-slate-50/80 -mx-6 -mb-8 p-4 rounded-b-2xl border-x-0 border-b-0 space-y-2 text-xs">
+              <div className="font-semibold text-slate-500 text-[11px] flex items-center justify-between">
+                <span>Atajos de prueba rápida (Dev):</span>
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                  DEV
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrefillApprentice}
+                  className="p-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-semibold text-slate-700 text-left truncate cursor-pointer"
+                >
+                  👨‍🎓 Rellenar Aprendiz
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrefillInstructor}
+                  className="p-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-semibold text-slate-700 text-left truncate cursor-pointer"
+                >
+                  👨‍🏫 Rellenar Instructor
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={handlePrefillApprentice}
-                className="p-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-semibold text-slate-700 text-left truncate cursor-pointer"
-              >
-                👨‍🎓 Rellenar Aprendiz
-              </button>
-              <button
-                type="button"
-                onClick={handlePrefillInstructor}
-                className="p-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-semibold text-slate-700 text-left truncate cursor-pointer"
-              >
-                👨‍🏫 Rellenar Instructor
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 

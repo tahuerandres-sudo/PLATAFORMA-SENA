@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Search,
   Filter,
+  Edit2,
 } from 'lucide-react';
 import {
   Ficha,
@@ -31,6 +32,7 @@ import {
   Competency,
   LearningOutcome,
   EvidenceActivity,
+  ProgramLevel,
 } from '../../types/academic';
 import { fichaService } from '../../services/academic/fichaService';
 import { programService } from '../../services/academic/programService';
@@ -54,7 +56,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   onNavigateToActivities,
 }) => {
   const { currentUser, userProfile } = useAuth();
-  const instructorUid = currentUser?.uid || userProfile?.uid || 'inst_carlos_mendoza';
+  const instructorUid = currentUser?.uid || userProfile?.uid || '';
 
   const [fichas, setFichas] = useState<Ficha[]>([]);
   const [selectedFichaId, setSelectedFichaId] = useState<string>('');
@@ -68,14 +70,33 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
   // Modales
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreateProgramModalOpen, setIsCreateProgramModalOpen] = useState(false);
+  const [isEditFichaModalOpen, setIsEditFichaModalOpen] = useState(false);
   const [isAddCompetencyModalOpen, setIsAddCompetencyModalOpen] = useState(false);
 
   // Formulario nueva Ficha
   const [newFichaNumber, setNewFichaNumber] = useState('');
+  const [programInputMode, setProgramInputMode] = useState<'custom' | 'existing'>('custom');
+  const [newProgramName, setNewProgramName] = useState('');
+  const [newProgramCode, setNewProgramCode] = useState('');
+  const [newProgramLevel, setNewProgramLevel] = useState<ProgramLevel>('tecnologo');
   const [newProgramId, setNewProgramId] = useState('');
   const [newCenterId, setNewCenterId] = useState('');
   const [newShift, setNewShift] = useState<'morning' | 'afternoon' | 'evening'>('evening');
   const [newStage, setNewStage] = useState<'induction' | 'lectiva' | 'productive' | 'completed'>('lectiva');
+
+  // Formulario nuevo Programa independiente
+  const [standaloneProgName, setStandaloneProgName] = useState('');
+  const [standaloneProgCode, setStandaloneProgCode] = useState('');
+  const [standaloneProgLevel, setStandaloneProgLevel] = useState<ProgramLevel>('tecnologo');
+  const [standaloneProgCenterId, setStandaloneProgCenterId] = useState('');
+  const [standaloneProgDesc, setStandaloneProgDesc] = useState('');
+
+  // Formulario editar Ficha / Programa
+  const [editFichaNumber, setEditFichaNumber] = useState('');
+  const [editProgramName, setEditProgramName] = useState('');
+  const [editShift, setEditShift] = useState<'morning' | 'afternoon' | 'evening'>('evening');
+  const [editStage, setEditStage] = useState<'induction' | 'lectiva' | 'productive' | 'completed'>('lectiva');
 
   // Formulario nueva Competencia para la Ficha
   const [newCompName, setNewCompName] = useState('');
@@ -110,6 +131,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       }
       if (loadedCenters.length > 0 && !newCenterId) {
         setNewCenterId(loadedCenters[0].id);
+        setStandaloneProgCenterId(loadedCenters[0].id);
       }
     } catch (err) {
       console.warn('[InstructorFichasView] Error cargando fichas:', err);
@@ -180,20 +202,64 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     completed: { label: 'Finalizada', badge: 'bg-slate-100 text-slate-800 border-slate-300' },
   };
 
-  // Guardar nueva Ficha (Firestore + Memoria)
+  // Guardar nueva Ficha (Firestore + Memoria) con soporte para escribir / editar Programa libremente
   const handleCreateFicha = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFichaNumber) return;
+    if (!newFichaNumber.trim()) return;
 
-    const prog = programs.find((p) => p.id === newProgramId);
+    let finalProgramId = newProgramId;
+    let finalProgramName = newProgramName.trim();
+
+    if (programInputMode === 'existing' && newProgramId) {
+      const selected = programs.find((p) => p.id === newProgramId);
+      if (selected) {
+        finalProgramName = newProgramName.trim() || selected.name;
+        // Si el usuario editó el nombre del programa existente
+        if (newProgramName.trim() && newProgramName.trim() !== selected.name) {
+          const updatedProg: TrainingProgram = {
+            ...selected,
+            name: newProgramName.trim(),
+            updatedAt: new Date().toISOString(),
+          };
+          await programService.saveProgram(updatedProg);
+          setPrograms((prev) => prev.map((p) => (p.id === selected.id ? updatedProg : p)));
+        }
+      }
+    } else {
+      if (!finalProgramName) {
+        finalProgramName = 'Programa de Formación SENA';
+      }
+      const existing = programs.find(
+        (p) => p.name.toLowerCase().trim() === finalProgramName.toLowerCase()
+      );
+      if (existing) {
+        finalProgramId = existing.id;
+      } else {
+        finalProgramId = `prog_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        const newProgObj: TrainingProgram = {
+          id: finalProgramId,
+          name: finalProgramName,
+          code: newProgramCode.trim() || `${Math.floor(100000 + Math.random() * 900000)}`,
+          level: newProgramLevel,
+          centerId: newCenterId || (centers[0]?.id ?? 'center_comercio_servicios'),
+          status: 'active',
+          description: `Programa de formación: ${finalProgramName}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await programService.saveProgram(newProgObj);
+        setPrograms((prev) => [newProgObj, ...prev]);
+      }
+    }
+
     const newFicha: Ficha = {
-      id: `ficha_${newFichaNumber}`,
-      number: newFichaNumber,
-      name: `Ficha ${newFichaNumber} - ${prog?.name || 'Formación SENA'}`,
-      programId: newProgramId || (programs[0]?.id ?? 'prog_gestion_contable'),
-      programName: prog?.name || 'Gestión Contable y de Información Financiera',
+      id: `ficha_${newFichaNumber.trim()}`,
+      number: newFichaNumber.trim(),
+      name: `Ficha ${newFichaNumber.trim()} - ${finalProgramName}`,
+      programId: finalProgramId,
+      programName: finalProgramName,
       centerId: newCenterId || (centers[0]?.id ?? 'center_comercio_servicios'),
-      instructorIds: [instructorUid],
+      instructorIds: instructorUid ? [instructorUid] : [],
       startDate: new Date().toISOString(),
       endDate: '2028-06-30T00:00:00Z',
       status: 'active',
@@ -208,6 +274,79 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     setSelectedFichaId(saved.id);
     setIsCreateModalOpen(false);
     setNewFichaNumber('');
+    setNewProgramName('');
+    setNewProgramCode('');
+  };
+
+  // Crear Programa Independiente
+  const handleCreateStandaloneProgram = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!standaloneProgName.trim()) return;
+
+    const progId = `prog_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    const newProg: TrainingProgram = {
+      id: progId,
+      name: standaloneProgName.trim(),
+      code: standaloneProgCode.trim() || `${Math.floor(100000 + Math.random() * 900000)}`,
+      level: standaloneProgLevel,
+      centerId: standaloneProgCenterId || (centers[0]?.id ?? 'center_comercio_servicios'),
+      status: 'active',
+      description: standaloneProgDesc.trim() || `Programa de formación: ${standaloneProgName.trim()}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await programService.saveProgram(newProg);
+    setPrograms((prev) => [newProg, ...prev]);
+    setIsCreateProgramModalOpen(false);
+    setStandaloneProgName('');
+    setStandaloneProgCode('');
+    setStandaloneProgDesc('');
+  };
+
+  // Abrir Modal de Edición de Ficha / Programa
+  const handleOpenEditFicha = (f: Ficha) => {
+    setEditFichaNumber(f.number);
+    setEditProgramName(f.programName || activeProgram?.name || '');
+    setEditShift(f.shift);
+    setEditStage(f.stage);
+    setIsEditFichaModalOpen(true);
+  };
+
+  // Guardar Edición de Ficha / Programa
+  const handleSaveEditFicha = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeFicha) return;
+
+    const updatedProgName = editProgramName.trim() || activeFicha.programName || 'Formación SENA';
+    const updatedFicha: Ficha = {
+      ...activeFicha,
+      number: editFichaNumber.trim() || activeFicha.number,
+      name: `Ficha ${editFichaNumber.trim() || activeFicha.number} - ${updatedProgName}`,
+      programName: updatedProgName,
+      shift: editShift,
+      stage: editStage,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await fichaService.saveFicha(updatedFicha);
+
+    // Actualizar también en /trainingPrograms si el programa existe
+    if (activeFicha.programId) {
+      const prog = programs.find((p) => p.id === activeFicha.programId);
+      if (prog && prog.name !== updatedProgName) {
+        const updatedProg: TrainingProgram = {
+          ...prog,
+          name: updatedProgName,
+          updatedAt: new Date().toISOString(),
+        };
+        await programService.saveProgram(updatedProg);
+        setPrograms((prev) => prev.map((p) => (p.id === prog.id ? updatedProg : p)));
+      }
+    }
+
+    setFichas((prev) => prev.map((f) => (f.id === activeFicha.id ? updatedFicha : f)));
+    setIsEditFichaModalOpen(false);
   };
 
   // Guardar nueva Competencia en el catálogo del Programa (reutilizable, sin duplicar por ficha)
@@ -282,7 +421,27 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsCreateModalOpen(true)}
+            onClick={() => {
+              setStandaloneProgName('');
+              setStandaloneProgCode('');
+              setStandaloneProgDesc('');
+              setStandaloneProgLevel('tecnologo');
+              if (centers.length > 0) setStandaloneProgCenterId(centers[0].id);
+              setIsCreateProgramModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-white border border-[#00324D] text-[#00324D] hover:bg-slate-50 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <BookOpen className="w-4 h-4 text-[#39A900]" />
+            + Nuevo Programa
+          </button>
+          <button
+            onClick={() => {
+              setNewFichaNumber('');
+              setNewProgramName('');
+              setNewProgramCode('');
+              setProgramInputMode('custom');
+              setIsCreateModalOpen(true);
+            }}
             className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -362,9 +521,19 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                         Etapa: {stageLabels[activeFicha.stage]?.label || activeFicha.stage}
                       </span>
                     </div>
-                    <h2 className="text-xl font-bold text-white tracking-tight">
-                      {activeProgram?.name || activeFicha.programName || 'Programa de Formación'}
-                    </h2>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h2 className="text-xl font-bold text-white tracking-tight">
+                        {activeProgram?.name || activeFicha.programName || 'Programa de Formación'}
+                      </h2>
+                      <button
+                        onClick={() => handleOpenEditFicha(activeFicha)}
+                        className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[#8CE665] hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
+                        title="Editar número de ficha o nombre del programa"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        Editar Programa / Ficha
+                      </button>
+                    </div>
                     <p className="text-xs text-slate-300 flex items-center gap-1.5">
                       <Building2 className="w-4 h-4 text-[#8CE665]" />
                       {activeCenter?.name || 'Centro de Comercio y Servicios'} · {activeCenter?.city || 'Ibagué'},{' '}
@@ -605,21 +774,143 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Programa de Formación Asociado *
-            </label>
-            <select
-              value={newProgramId}
-              onChange={(e) => setNewProgramId(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
-            >
-              {programs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.code}) - {p.level}
-                </option>
-              ))}
-            </select>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-700">
+                Programa de Formación Asociado *
+              </label>
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProgramInputMode('custom');
+                    setNewProgramName('');
+                    setNewProgramCode('');
+                  }}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                    programInputMode === 'custom'
+                      ? 'bg-white text-[#00324D] shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Escribir Nuevo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProgramInputMode('existing');
+                    if (!newProgramId && programs.length > 0) {
+                      setNewProgramId(programs[0].id);
+                      setNewProgramName(programs[0].name);
+                      setNewProgramCode(programs[0].code);
+                      setNewProgramLevel(programs[0].level);
+                    }
+                  }}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                    programInputMode === 'existing'
+                      ? 'bg-white text-[#00324D] shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Seleccionar Existente
+                </button>
+              </div>
+            </div>
+
+            {programInputMode === 'custom' ? (
+              <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Escribe el Nombre del Programa *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Escribe el nombre del programa (ej: Análisis y Desarrollo de Software)"
+                    required
+                    value={newProgramName}
+                    onChange={(e) => setNewProgramName(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Escribe libremente el nombre del programa sin estar limitado a los existentes.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Código del Programa
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej: 228106"
+                      value={newProgramCode}
+                      onChange={(e) => setNewProgramCode(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Nivel de Formación
+                    </label>
+                    <select
+                      value={newProgramLevel}
+                      onChange={(e) => setNewProgramLevel(e.target.value as ProgramLevel)}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                    >
+                      <option value="tecnologo">Tecnólogo</option>
+                      <option value="tecnico">Técnico</option>
+                      <option value="especializacion">Especialización Tecnológica</option>
+                      <option value="operario">Operario</option>
+                      <option value="auxiliar">Auxiliar</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Seleccionar Programa Registrado
+                  </label>
+                  <select
+                    value={newProgramId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      setNewProgramId(id);
+                      const prog = programs.find((p) => p.id === id);
+                      if (prog) {
+                        setNewProgramName(prog.name);
+                        setNewProgramCode(prog.code);
+                        setNewProgramLevel(prog.level);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                  >
+                    {programs.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.code}) - {p.level}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Editar / Personalizar Nombre del Programa *
+                  </label>
+                  <input
+                    type="text"
+                    value={newProgramName}
+                    onChange={(e) => setNewProgramName(e.target.value)}
+                    placeholder="Escribe o modifica el nombre del programa aquí..."
+                    required
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Puedes editar o personalizar el nombre del programa libremente para esta ficha.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -771,6 +1062,202 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               onChange={(e) => setNewCompDesc(e.target.value)}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
             />
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal: Crear Nuevo Programa de Formación Independiente */}
+      <Modal
+        isOpen={isCreateProgramModalOpen}
+        onClose={() => setIsCreateProgramModalOpen(false)}
+        title="Crear Nuevo Programa de Formación SENA"
+        subtitle="Registro oficial en /trainingPrograms sin depender de plantillas por defecto"
+        footer={
+          <>
+            <button
+              onClick={() => setIsCreateProgramModalOpen(false)}
+              className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleCreateStandaloneProgram}
+              disabled={!standaloneProgName.trim()}
+              className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] disabled:bg-slate-300 text-white rounded-lg text-xs font-bold cursor-pointer"
+            >
+              Guardar Programa
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={handleCreateStandaloneProgram} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Nombre del Programa de Formación *
+            </label>
+            <input
+              type="text"
+              placeholder="Escribe el nombre del programa (ej: Análisis y Desarrollo de Software)"
+              required
+              autoFocus
+              value={standaloneProgName}
+              onChange={(e) => setStandaloneProgName(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Ingresa el nombre oficial del programa. No se impondrá ningún programa por defecto.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Código del Programa
+              </label>
+              <input
+                type="text"
+                placeholder="Ej: 228106 o 233104"
+                value={standaloneProgCode}
+                onChange={(e) => setStandaloneProgCode(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Nivel de Formación *
+              </label>
+              <select
+                value={standaloneProgLevel}
+                onChange={(e) => setStandaloneProgLevel(e.target.value as ProgramLevel)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="tecnologo">Tecnólogo</option>
+                <option value="tecnico">Técnico</option>
+                <option value="especializacion">Especialización Tecnológica</option>
+                <option value="operario">Operario</option>
+                <option value="auxiliar">Auxiliar</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Centro de Formación *
+            </label>
+            <select
+              value={standaloneProgCenterId}
+              onChange={(e) => setStandaloneProgCenterId(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            >
+              {centers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.code}) - {c.city}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Descripción del Programa (Opcional)
+            </label>
+            <textarea
+              rows={3}
+              placeholder="Descripción del perfil de egreso, justificación y alcance pedagógico..."
+              value={standaloneProgDesc}
+              onChange={(e) => setStandaloneProgDesc(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            />
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal: Editar Ficha / Programa */}
+      <Modal
+        isOpen={isEditFichaModalOpen}
+        onClose={() => setIsEditFichaModalOpen(false)}
+        title="Editar Ficha y Nombre de Programa"
+        subtitle="Actualización oficial en /fichas y catálogo /trainingPrograms"
+        footer={
+          <>
+            <button
+              onClick={() => setIsEditFichaModalOpen(false)}
+              className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSaveEditFicha}
+              className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold cursor-pointer"
+            >
+              Guardar Cambios
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={handleSaveEditFicha} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Número de Ficha *
+            </label>
+            <input
+              type="text"
+              required
+              value={editFichaNumber}
+              onChange={(e) => setEditFichaNumber(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Nombre del Programa de Formación (Escribir o Editar) *
+            </label>
+            <input
+              type="text"
+              required
+              value={editProgramName}
+              onChange={(e) => setEditProgramName(e.target.value)}
+              placeholder="Escribe o modifica el nombre del programa..."
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Puedes corregir o escribir el nombre que corresponda a esta ficha.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Jornada Formativa
+              </label>
+              <select
+                value={editShift}
+                onChange={(e) => setEditShift(e.target.value as any)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="morning">Diurna (Mañana)</option>
+                <option value="afternoon">Tarde</option>
+                <option value="evening">Nocturna</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Etapa Formativa
+              </label>
+              <select
+                value={editStage}
+                onChange={(e) => setEditStage(e.target.value as any)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="induction">Inducción</option>
+                <option value="lectiva">Etapa Lectiva</option>
+                <option value="productive">Etapa Productiva</option>
+                <option value="completed">Finalizada</option>
+              </select>
+            </div>
           </div>
         </form>
       </Modal>

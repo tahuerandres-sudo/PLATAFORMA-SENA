@@ -17,7 +17,6 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { SENA_BRAND } from '../../config/constants';
-import { DEMO_NOTIFICATIONS, DemoNotification } from '../../data/mockData';
 import { notificationService, AppNotification } from '../../services/academic/notificationService';
 import { useAuth } from '../../hooks/useAuth';
 import { RolePromotionModal } from '../common/RolePromotionModal';
@@ -41,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigateSettings,
   onToggleMobileMenu,
   onNavigateBlueprint,
-  unreadCount = 2,
+  unreadCount,
 }) => {
   const { userProfile, currentUser, logout, isAuthenticated } = useAuth();
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
@@ -49,21 +48,28 @@ export const Header: React.FC<HeaderProps> = ({
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  const userId = userProfile?.uid || currentUser?.uid || 'appr_juan_perez';
+  const userId = userProfile?.uid || currentUser?.uid || '';
 
+  // Suscripción reactiva en tiempo real a las notificaciones desde Firestore
   useEffect(() => {
-    async function fetchNotifs() {
-      try {
-        const notifs = await notificationService.getNotifications(userId);
-        setNotifications(notifs);
-      } catch (e) {
-        console.warn('Error cargando notificaciones header:', e);
-      }
+    if (!userId) {
+      setNotifications([]);
+      return;
     }
-    fetchNotifs();
+
+    const unsubscribe = notificationService.subscribeToNotifications(
+      userId,
+      (liveNotifs) => {
+        setNotifications(liveNotifs);
+      },
+      8
+    );
+
+    return () => unsubscribe();
   }, [userId]);
 
   const realUnreadCount = notifications.filter((n) => !n.isRead).length;
+  const effectiveUnreadCount = typeof unreadCount === 'number' ? unreadCount : realUnreadCount;
 
   const displayName = userProfile?.displayName || currentUser?.displayName || 'Usuario SENA';
   const displayEmail = userProfile?.email || currentUser?.email || '';
@@ -77,8 +83,20 @@ export const Header: React.FC<HeaderProps> = ({
   const roleLabel = userProfile?.role === 'instructor' ? 'Instructor SENA' : 'Aprendiz SENA';
 
   const markAllAsRead = async () => {
+    if (!userId) return;
     await notificationService.markAllAsRead(userId);
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true, read: true })));
+  };
+
+  const handleNotificationClick = async (notif: AppNotification) => {
+    if (!notif.isRead) {
+      await notificationService.markAsRead(notif.id);
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notif.id ? { ...n, isRead: true, read: true } : n))
+      );
+    }
+    setShowNotificationsMenu(false);
+    onNavigateNotifications();
   };
 
   const handleLogout = async () => {
@@ -151,7 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Lado Derecho: Notificaciones + Perfil */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Campanita de Notificaciones */}
+          {/* Campanita de Notificaciones (PROMPT 16: Contador real de Firestore) */}
           <div className="relative">
             <button
               onClick={() => setShowNotificationsMenu(!showNotificationsMenu)}
@@ -159,44 +177,69 @@ export const Header: React.FC<HeaderProps> = ({
               aria-label="Ver notificaciones"
             >
               <Bell className="w-5 h-5" />
-              {(realUnreadCount > 0 || unreadCount > 0) && (
-                <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-[#00324D]">
-                  {realUnreadCount > 0 ? realUnreadCount : unreadCount}
+              {effectiveUnreadCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-4.5 h-4.5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-[#00324D] shadow-xs">
+                  {effectiveUnreadCount > 99 ? '99+' : effectiveUnreadCount}
                 </span>
               )}
             </button>
 
             {/* Dropdown Notificaciones Rápidas */}
             {showNotificationsMenu && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-xl border border-slate-200 text-slate-800 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 text-slate-800 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                  <div className="font-bold text-xs text-[#00324D]">Notificaciones</div>
-                  <button
-                    onClick={markAllAsRead}
-                    className="text-[11px] text-[#2E8500] hover:underline font-semibold cursor-pointer"
-                  >
-                    Marcar leídas
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xs text-[#00324D]">Notificaciones</span>
+                    {effectiveUnreadCount > 0 ? (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
+                        {effectiveUnreadCount} unread
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-medium">Al día</span>
+                    )}
+                  </div>
+                  {effectiveUnreadCount > 0 && (
+                    <button
+                      onClick={markAllAsRead}
+                      className="text-[11px] text-[#2E8500] hover:underline font-semibold cursor-pointer"
+                    >
+                      Marcar leídas
+                    </button>
+                  )}
                 </div>
 
-                <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
-                  {notifications.slice(0, 4).map((n) => (
-                    <div
-                      key={n.id}
-                      className={`p-3 text-xs hover:bg-slate-50 transition-colors ${
-                        !n.isRead ? 'bg-[#EBF8E7]/40' : ''
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-1">
-                        <span className="font-semibold text-slate-800 leading-snug">{n.title}</span>
-                        {!n.isRead && (
-                          <span className="w-2 h-2 rounded-full bg-[#39A900] shrink-0 mt-1" />
-                        )}
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{n.description}</p>
-                      <span className="text-[10px] text-slate-400 mt-1 block">{n.timeAgo}</span>
+                <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                  {notifications.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-500">
+                      <p className="font-medium text-slate-700">You're all caught up.</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">No tienes notificaciones pendientes.</p>
                     </div>
-                  ))}
+                  ) : (
+                    notifications.slice(0, 5).map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => handleNotificationClick(n)}
+                        className={`p-3.5 text-xs hover:bg-slate-50 transition-colors cursor-pointer flex items-start gap-2.5 ${
+                          !n.isRead ? 'bg-[#EBF8E7]/40' : ''
+                        }`}
+                      >
+                        <div className="w-2 h-2 rounded-full shrink-0 mt-1.5" style={{ backgroundColor: !n.isRead ? '#39A900' : 'transparent' }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-1">
+                            <span className={`font-semibold leading-snug line-clamp-1 ${!n.isRead ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
+                              {n.title}
+                            </span>
+                            <span className="text-[10px] text-slate-400 shrink-0">
+                              {n.timeAgo}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2 leading-relaxed">
+                            {n.message || n.description}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 <div className="p-2.5 bg-slate-50 border-t border-slate-100 text-center">
@@ -205,7 +248,7 @@ export const Header: React.FC<HeaderProps> = ({
                       setShowNotificationsMenu(false);
                       onNavigateNotifications();
                     }}
-                    className="text-xs font-semibold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer"
+                    className="text-xs font-semibold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer w-full py-1"
                   >
                     Ver todas las notificaciones →
                   </button>

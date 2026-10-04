@@ -380,6 +380,13 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({
               <span>Reportes de Evaluación</span>
             </button>
             <button
+              onClick={() => onNavigate('calendar')}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold transition-all border border-white/20 flex items-center gap-2 cursor-pointer"
+            >
+              <Calendar className="w-4 h-4 text-sky-400" />
+              <span>Calendario Académico</span>
+            </button>
+            <button
               onClick={onOpenCreateActivity}
               className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold transition-all border border-white/20 flex items-center gap-2 cursor-pointer"
             >

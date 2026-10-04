@@ -15,6 +15,7 @@ import {
   FolderArchive,
   Award,
   CalendarCheck,
+  Calendar,
   ClipboardList,
   AlertTriangle,
   BarChart3,
@@ -41,6 +42,7 @@ interface SidebarProps {
   currentRole: ActiveRole;
   activeView: string;
   onNavigate: (viewId: string) => void;
+  unreadNotificationsCount?: number;
   className?: string;
 }
 
@@ -48,17 +50,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentRole,
   activeView,
   onNavigate,
+  unreadNotificationsCount,
   className = '',
 }) => {
+  const notifBadge =
+    typeof unreadNotificationsCount === 'number' && unreadNotificationsCount > 0
+      ? String(unreadNotificationsCount)
+      : undefined;
+
   // Menú oficial y ordenado para el Instructor (Prompt 3 - Requisito 22)
   const instructorNavItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
     { id: 'courses', label: 'Mis cursos', icon: BookOpen },
     { id: 'fichas', label: 'Mis fichas', icon: Users, badge: '4' },
-    { id: 'apprentices', label: 'Aprendices', icon: UserCheck, badge: '128' },
+    { id: 'apprentices', label: 'Aprendices y Expedientes', icon: UserCheck, badge: '128' },
     { id: 'competencies', label: 'Competencias', icon: Target },
     { id: 'learning_outcomes', label: 'Resultados de aprendizaje', icon: ListOrdered },
     { id: 'activities', label: 'Actividades', icon: FileText, badge: '4' },
+    { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
     { id: 'submissions', label: 'Evidencias', icon: FolderArchive, badge: '4' },
     { id: 'grades', label: 'Calificaciones', icon: Award },
     { id: 'attendance', label: 'Asistencia', icon: CalendarCheck },
@@ -68,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'announcements', label: 'Anuncios', icon: Megaphone },
     { id: 'gamification', label: 'Gamificación', icon: Gamepad2 },
     { id: 'ai_tools', label: 'Herramientas IA', icon: Sparkles },
-    { id: 'notifications', label: 'Notificaciones', icon: Bell, badge: '2' },
+    { id: 'notifications', label: 'Notificaciones', icon: Bell, badge: notifBadge },
     { id: 'settings', label: 'Configuración', icon: Settings },
   ];
 
@@ -76,14 +85,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'dashboard', label: 'Inicio', icon: Home },
     { id: 'courses', label: 'Mis cursos', icon: BookOpen },
     { id: 'activities', label: 'Mis actividades', icon: FileText, badge: '2' },
+    { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
     { id: 'submissions', label: 'Mis evidencias', icon: FolderArchive },
     { id: 'grades', label: 'Mis calificaciones', icon: Award },
+    { id: 'announcements', label: 'Anuncios', icon: Megaphone },
     { id: 'attendance_tracking', label: 'Asistencia y Justificaciones', icon: CalendarCheck },
     { id: 'progress', label: 'Mi progreso', icon: BarChart3 },
-    { id: 'achievements', label: 'Mis logros', icon: Trophy, badge: 'Nivel 8' },
+    { id: 'achievements', label: 'Mis logros', icon: Trophy },
     { id: 'ranking', label: 'Ranking', icon: Medal },
-    { id: 'notifications', label: 'Notificaciones', icon: Bell, badge: '2' },
-    { id: 'profile', label: 'Perfil', icon: User },
+    { id: 'ai_tools', label: 'Herramientas IA', icon: Sparkles },
+    { id: 'notifications', label: 'Notificaciones', icon: Bell, badge: notifBadge },
+    { id: 'profile', label: 'Mi Perfil / Expediente', icon: User },
     { id: 'settings', label: 'Configuración', icon: Settings },
   ];
 

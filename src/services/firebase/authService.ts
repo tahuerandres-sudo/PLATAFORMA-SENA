@@ -34,11 +34,18 @@ export function translateAuthError(error: any): string {
   const code = error?.code || '';
   const message = error?.message || '';
 
-  if (code === 'auth/operation-not-allowed') {
-    return 'El proveedor de autenticación con Correo/Contraseña no está habilitado en Firebase Console (Authentication > Sign-in method). Por favor habilítalo para permitir el registro.';
+  if (code === 'auth/unauthorized-domain' || message.includes('unauthorized-domain')) {
+    return 'El dominio actual de la aplicación no está autorizado en Firebase Authentication. Para solucionarlo, debes agregar este dominio (ej: plataform-sena.netlify.app) en Firebase Console > Authentication > Settings > Dominios autorizados.';
   }
-  if (code === 'auth/api-key-not-valid-please-pass-a-valid-api-key' || code === 'auth/invalid-api-key' || message.includes('api-key-not-valid')) {
-    return 'La API Key de Firebase configurada en el entorno es inválida o está incompleta. Por favor actualiza VITE_FIREBASE_API_KEY en Google AI Studio con la clave completa de Firebase Console (Proyecto: sena-learning-hub).';
+  if (code === 'auth/operation-not-allowed') {
+    return 'El proveedor de autenticación no está habilitado en Firebase Console (Authentication > Sign-in method). Por favor habilítalo en la consola de Firebase.';
+  }
+  if (
+    code === 'auth/api-key-not-valid-please-pass-a-valid-api-key' ||
+    code === 'auth/invalid-api-key' ||
+    message.includes('api-key-not-valid')
+  ) {
+    return 'La API Key de Firebase configurada en el entorno es inválida o está incompleta. Por favor verifica las credenciales de Firebase en el proyecto sena-learning-hub.';
   }
   if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
     return 'El correo electrónico o la contraseña ingresada no son correctos.';
@@ -56,13 +63,25 @@ export function translateAuthError(error: any): string {
     return 'La ventana de inicio de sesión con Google se cerró antes de completar.';
   }
   if (code === 'auth/popup-blocked') {
-    return 'El navegador bloqueó la ventana emergente de Google. Permite las ventanas emergentes para continuar.';
+    return 'El navegador bloqueó la ventana emergente de Google. Por favor permite las ventanas emergentes en tu navegador para continuar.';
+  }
+  if (code === 'auth/cancelled-popup-request') {
+    return 'Se canceló la solicitud de autenticación debido a una acción simultánea o apertura múltiple de ventanas.';
   }
   if (code === 'auth/too-many-requests') {
-    return 'Demasiados intentos fallidos consecutivos. Por favor espera unos minutos.';
+    return 'Demasiados intentos fallidos consecutivos. Por favor espera unos minutos antes de intentar de nuevo.';
   }
   if (code === 'auth/network-request-failed') {
     return 'Error de conexión de red. Verifica tu acceso a internet.';
+  }
+  if (code === 'auth/user-disabled') {
+    return 'Esta cuenta de usuario ha sido deshabilitada en el sistema. Contacta al centro de formación.';
+  }
+  if (code === 'auth/account-exists-with-different-credential') {
+    return 'Ya existe una cuenta asociada a este correo con otro método de autenticación. Inicia sesión con tus credenciales originales.';
+  }
+  if (code === 'auth/requires-recent-login') {
+    return 'Esta acción requiere una autenticación reciente. Por favor vuelve a iniciar sesión.';
   }
   if (message.includes('cuenta bloqueada') || message.includes('blocked')) {
     return 'Tu cuenta se encuentra bloqueada. Contacta al instructor o administrador del centro.';
@@ -157,26 +176,54 @@ export async function loginWithGoogleFirebase(): Promise<UserProfile> {
     await signOut(auth);
     throw new Error('cuenta bloqueada');
   }
+  if (profile.status === 'inactive') {
+    await signOut(auth);
+    throw new Error('cuenta inactiva');
+  }
 
   return profile;
 }
 
 /**
  * Obtiene o crea el documento en /users/{uid} para un usuario autenticado
+ * REGLA ESTRICTA DE SEGURIDAD (Sección 6):
+ * - Consulta Firestore /users/{uid}
+ * - Si existe: Mantiene rigurosamente el rol existente (nunca degrada un instructor a aprendiz)
+ * - Si no existe (primer ingreso con Google): Crea el perfil con rol 'apprentice' por defecto
  */
 export async function getUserProfileFromFirestore(user: FirebaseUser): Promise<UserProfile> {
   const userDocRef = doc(db, 'users', user.uid);
+  
+  let snapshot;
   try {
-    const snapshot = await getDoc(userDocRef);
-
-    if (snapshot.exists()) {
-      return snapshot.data() as UserProfile;
-    }
+    snapshot = await getDoc(userDocRef);
   } catch (error) {
-    console.warn('[Firestore] Aviso de lectura de perfil:', error);
+    console.error('[Firestore] Error al consultar perfil en /users/' + user.uid + ':', error);
+    throw error;
   }
 
-  // Si no existe (ej: primer ingreso con Google), crear perfil inicial seguro como aprendiz
+  // 1. Si el usuario ya existe en Firestore, retornamos su perfil real sin tocar su rol
+  if (snapshot.exists()) {
+    const existing = snapshot.data() as UserProfile;
+    // Sincronización cosmética opcional: si falta foto o nombre y Google los tiene, actualizamos solo esos campos
+    if ((!existing.displayName && user.displayName) || (!existing.photoURL && user.photoURL)) {
+      try {
+        const cosmeticUpdates: Partial<UserProfile> = {
+          updatedAt: new Date().toISOString(),
+        };
+        if (!existing.displayName && user.displayName) cosmeticUpdates.displayName = user.displayName;
+        if (!existing.photoURL && user.photoURL) cosmeticUpdates.photoURL = user.photoURL;
+        await updateDoc(userDocRef, cosmeticUpdates);
+        return { ...existing, ...cosmeticUpdates };
+      } catch (err) {
+        console.warn('[Firestore] No se pudieron actualizar campos cosméticos de Google:', err);
+      }
+    }
+    return existing;
+  }
+
+  // 2. Si NO existe documento (primer ingreso de este usuario con Google o proveedor externo)
+  // Siempre se crea con rol seguro 'apprentice'
   const now = new Date().toISOString();
   const defaultRole: UserRole = 'apprentice';
   const newProfile: UserProfile = {
@@ -189,10 +236,10 @@ export async function getUserProfileFromFirestore(user: FirebaseUser): Promise<U
     role: defaultRole,
     documentNumber: '',
     phone: '',
-    programId: 'prog_gestion_contable',
-    programName: 'Gestión Contable y de Información Financiera',
-    fichaId: '1234567',
-    centerId: 'center_comercio_servicios',
+    programId: '',
+    programName: '',
+    fichaId: '',
+    centerId: '',
     status: 'active',
     createdAt: now,
     updatedAt: now,
@@ -202,6 +249,7 @@ export async function getUserProfileFromFirestore(user: FirebaseUser): Promise<U
     await setDoc(userDocRef, newProfile);
   } catch (err) {
     console.error('[Firestore] Error al persistir documento /users/' + user.uid + ':', err);
+    throw err;
   }
 
   return newProfile;

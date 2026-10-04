@@ -252,4 +252,144 @@ export const driveService = {
       sharedInstructorEmail,
     };
   },
+
+  /**
+   * Sube un archivo de recurso pedagógico a Google Drive
+   * Carpeta: SENA Learning Hub / Recursos / [Programa] / Ficha [Num] / [Curso]
+   * PROMPT 20 - Requisito 6
+   */
+  async uploadResourceFile(params: {
+    file: File;
+    programName?: string;
+    fichaNumber?: string;
+    courseName?: string;
+    resourceTitle?: string;
+    onProgress?: UploadProgressCallback;
+  }): Promise<DriveUploadResult> {
+    const { file, programName, fichaNumber, courseName, resourceTitle, onProgress } = params;
+
+    const token = driveAuthService.getAccessToken();
+    if (!token) {
+      throw new Error(
+        'Google Drive no está conectado. Por favor conecta tu cuenta de Google Drive para subir materiales didácticos.'
+      );
+    }
+
+    if (onProgress) onProgress(5, 0, file.size);
+
+    // 1. Obtener o crear jerarquía de carpetas para recursos
+    const { folderId, structuredPath } =
+      await driveFolderService.getOrCreateResourceFolderHierarchy({
+        programName,
+        fichaNumber,
+        courseName,
+      });
+
+    if (onProgress) onProgress(15, 0, file.size);
+
+    // 2. Preparar subida multipart a Google Drive API v3
+    const sanitizedFileName = resourceTitle
+      ? `${resourceTitle.replace(/[^a-zA-Z0-9_\-\. ]/g, '').replace(/\s+/g, '_')}_${file.name}`
+      : file.name;
+
+    const metadata = {
+      name: sanitizedFileName,
+      parents: [folderId],
+      description: `Recurso Didáctico SENA Learning Hub${fichaNumber ? ` · Ficha ${fichaNumber}` : ''}${courseName ? ` · ${courseName}` : ''}`,
+      properties: {
+        institution: 'SENA',
+        type: 'educational_resource',
+        ficha: fichaNumber || 'general',
+        course: courseName || 'general',
+      },
+    };
+
+    const boundary = '-------314159265358979323846';
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelimiter = `\r\n--${boundary}--`;
+
+    const fileReader = new FileReader();
+    const fileDataPromise = new Promise<ArrayBuffer>((resolve, reject) => {
+      fileReader.onload = () => resolve(fileReader.result as ArrayBuffer);
+      fileReader.onerror = () => reject(new Error('Error leyendo el archivo en el navegador'));
+      fileReader.readAsArrayBuffer(file);
+    });
+
+    const fileBuffer = await fileDataPromise;
+    const contentType = file.type || 'application/octet-stream';
+
+    const metadataHeader =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      `Content-Type: ${contentType}\r\n` +
+      'Content-Transfer-Encoding: binary\r\n\r\n';
+
+    const metadataBytes = new TextEncoder().encode(metadataHeader);
+    const closeDelimiterBytes = new TextEncoder().encode(closeDelimiter);
+
+    const totalLength = metadataBytes.length + fileBuffer.byteLength + closeDelimiterBytes.length;
+    const multipartBody = new Uint8Array(totalLength);
+
+    multipartBody.set(metadataBytes, 0);
+    multipartBody.set(new Uint8Array(fileBuffer), metadataBytes.length);
+    multipartBody.set(closeDelimiterBytes, metadataBytes.length + fileBuffer.byteLength);
+
+    // 3. Ejecutar subida mediante XMLHttpRequest
+    const uploadResult = await new Promise<any>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(
+        'POST',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink,webContentLink'
+      );
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('Content-Type', `multipart/related; boundary=${boundary}`);
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          const uploadPct = Math.round(20 + (event.loaded / event.total) * 70);
+          onProgress(uploadPct, event.loaded, event.total);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            resolve(response);
+          } catch {
+            reject(new Error('Respuesta inválida de Google Drive'));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err?.error?.message || `HTTP ${xhr.status} subiendo archivo a Drive`));
+          } catch {
+            reject(new Error(`HTTP ${xhr.status} subiendo archivo a Drive`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Fallo de red al conectar con Google Drive API'));
+      xhr.send(multipartBody);
+    });
+
+    if (onProgress) onProgress(100, file.size, file.size);
+
+    const driveUrl =
+      uploadResult.webViewLink ||
+      `https://drive.google.com/file/d/${uploadResult.id}/view?usp=sharing`;
+
+    return {
+      driveFileId: uploadResult.id,
+      driveUrl,
+      webContentLink: uploadResult.webContentLink,
+      fileName: uploadResult.name || file.name,
+      fileSize: uploadResult.size ? Number(uploadResult.size) : file.size,
+      mimeType: uploadResult.mimeType || contentType,
+      folderId,
+      structuredPath,
+    };
+  },
 };

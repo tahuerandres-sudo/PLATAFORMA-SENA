@@ -279,6 +279,8 @@ export interface EvidenceActivity {
   endDate?: string; // Fecha de cierre (Sección 12)
   points: number; // Por defecto 100
   instructions: string;
+  rubricId?: string | null; // Asociación opcional con Rúbrica Pedagógica (Prompt 19)
+  rubricTitle?: string;
 
   // Validación de tipo de entrega de evidencia
   submissionType: EvidenceType;
@@ -310,6 +312,7 @@ export type SubmissionAcademicStatus =
 export interface AcademicSubmission {
   id: string;
   activityId: string;
+  activityTitle?: string;
   learnerId: string; // UID del aprendiz
   userId: string; // Alias para compatibilidad con auth UID
   learnerName?: string;
@@ -354,6 +357,10 @@ export interface AcademicSubmission {
   instructorEmail?: string; // Correo del instructor para permisos Drive
   resubmissionCount: number;
   submissionHistory?: SubmissionHistoryItem[];
+  rubricEvaluationId?: string; // Referencia opcional a la evaluación formativa de rúbrica
+  rubricScore?: number; // Puntos obtenidos en la rúbrica (ej: 83)
+  rubricMaxScore?: number; // Puntos posibles de la rúbrica (ej: 100)
+  rubricPercentage?: number; // Porcentaje de la rúbrica (ej: 83%)
   competencyId?: string;
   createdAt: string;
   updatedAt: string;
@@ -373,6 +380,10 @@ export interface SubmissionHistoryItem {
   feedback?: string;
   gradedBy?: string;
   gradedAt?: string;
+  rubricEvaluationId?: string;
+  rubricScore?: number;
+  rubricMaxScore?: number;
+  rubricPercentage?: number;
 }
 
 // ==========================================
@@ -659,3 +670,455 @@ export interface ReportData {
   recordsCount: number;
   data: any[];
 }
+
+// ==========================================
+// 19. ANUNCIOS INSTITUCIONALES (Announcement)
+// Colección Firestore: /announcements
+// ==========================================
+
+export type AnnouncementTargetType = 'ALL' | 'PROGRAM' | 'FICHA' | 'COURSE' | 'USER';
+export type AnnouncementPriority = 'NORMAL' | 'IMPORTANT' | 'URGENT';
+export type AnnouncementStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  createdBy: string;
+  creatorName: string;
+  creatorEmail: string;
+  targetType: AnnouncementTargetType;
+  targetIds: string[];
+  programIds?: string[];
+  fichaIds?: string[];
+  courseIds?: string[];
+  priority: AnnouncementPriority;
+  status: AnnouncementStatus;
+  publishedAt: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// 20. GAMIFICACIÓN INSTITUCIONAL (Gamification)
+// Colecciones Firestore: /gamificationProfiles, /gamificationEvents, /badges, /userBadges, /achievements
+// ==========================================
+
+export type GamificationEventType =
+  | 'ACTIVITY_COMPLETED'
+  | 'EVIDENCE_SUBMITTED'
+  | 'EVIDENCE_APPROVED'
+  | 'CORRECTION_COMPLETED'
+  | 'ATTENDANCE_PRESENT'
+  | 'STREAK'
+  | 'ACHIEVEMENT'
+  | 'BADGE'
+  | 'MANUAL_ADJUSTMENT';
+
+export interface GamificationProfile {
+  userId: string;
+  totalPoints: number;
+  level: number;
+  experiencePoints: number; // XP
+  completedActivities: number;
+  approvedEvidenceCount: number;
+  achievementsCount: number;
+  badgesCount: number;
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate?: string;
+  updatedAt: string;
+}
+
+export interface GamificationEvent {
+  id: string;
+  userId: string;
+  type: GamificationEventType;
+  points: number;
+  sourceId?: string;
+  sourceType?: 'submission' | 'activity' | 'attendance' | 'streak' | 'achievement' | 'badge' | 'manual';
+  description: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
+export interface BadgeDefinition {
+  id: string;
+  name: string;
+  title?: string;
+  description: string;
+  icon: string;
+  category: 'academic' | 'attendance' | 'streak' | 'bilingualism' | 'special';
+  xpReward: number;
+  criteria: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface UserBadge {
+  id: string; // ub_{userId}_{badgeId}
+  userId: string;
+  badgeId: string;
+  unlockedAt: string;
+  sourceEventId?: string;
+}
+
+export interface AchievementDefinition {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  targetCount: number;
+  metric: 'submissions' | 'approvals' | 'corrections' | 'attendance' | 'level';
+  xpReward: number;
+  createdAt: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  userId: string;
+  name: string;
+  displayName?: string;
+  avatarUrl: string;
+  level: number;
+  xp: number;
+  totalPoints: number;
+  badgesCount: number;
+  streakDays: number;
+  isCurrentUser?: boolean;
+}
+
+// ==========================================
+// 20. EXPEDIENTE ACADÉMICO DIGITAL (PROMPT 17)
+// ==========================================
+
+export interface AssignedInstructorInfo {
+  uid: string;
+  displayName: string;
+  email: string;
+  phone?: string;
+  role?: string;
+}
+
+export interface CurricularProgressOutcome {
+  outcome: LearningOutcome;
+  activities: EvidenceActivity[];
+  submissions: AcademicSubmission[];
+  status: 'completed' | 'in_progress' | 'pending';
+}
+
+export interface CurricularProgressCompetency {
+  competency: Competency;
+  course?: Course;
+  learningOutcomes: CurricularProgressOutcome[];
+  totalActivities: number;
+  completedActivities: number;
+  approvedCount: number;
+  status: 'completed' | 'in_progress' | 'pending';
+}
+
+export interface EvidenceProgressItem {
+  activity: EvidenceActivity;
+  submission?: AcademicSubmission;
+  status: 'approved' | 'not_approved' | 'correction_required' | 'submitted' | 'pending';
+  grade?: 'A' | 'N' | 'C' | number | null;
+  score?: number;
+  submittedAt?: string;
+  dueDate?: string;
+  feedback?: string;
+  fileUrl?: string;
+  fileName?: string;
+  canResubmit: boolean;
+}
+
+export interface ApprenticeAcademicExpediente {
+  // 1. Información Personal Disponible
+  personalInfo: {
+    uid: string;
+    displayName: string;
+    email: string;
+    documentNumber?: string;
+    documentType?: string;
+    phone?: string;
+    photoURL?: string;
+    role: string;
+    status: string;
+  };
+  // 2. Información Académica
+  academicInfo: {
+    programName: string;
+    programCode?: string;
+    fichaId: string;
+    fichaNumber: string;
+    centerName: string;
+    regional?: string;
+    jornada?: string;
+    enrollmentStatus?: string;
+    currentCourse?: string;
+    enrollmentDate?: string;
+    assignedInstructors: AssignedInstructorInfo[];
+  };
+  // 3. Resumen Académico Real (Academic Summary)
+  summary: {
+    assignedActivitiesCount: number;
+    completedActivitiesCount: number;
+    submittedEvidencesCount: number;
+    approvedEvidencesCount: number;
+    correctionEvidencesCount: number;
+    notApprovedEvidencesCount: number;
+    pendingEvidencesCount: number;
+    complianceRate: number; // % cumplimiento interno (aprobadas / evaluadas * 100)
+    submissionRate: number; // % entregas internas (completadas / asignadas * 100)
+    // Asistencia
+    totalAttendanceSessions: number;
+    attendedSessions: number;
+    absenceCount: number;
+    lateCount: number;
+    excusedCount: number;
+    attendanceRate: number;
+    punctualityRate: number;
+    // Justificaciones
+    totalJustifications: number;
+    approvedJustifications: number;
+    pendingJustifications: number;
+    rejectedJustifications: number;
+    // Restricciones
+    activeRestrictionsCount: number;
+    activeRestrictions: AcademicRestriction[];
+    // Gamificación
+    gamificationLevel: number;
+    levelTitle: string;
+    experiencePoints: number;
+    totalPoints: number;
+    nextLevelPoints: number;
+    progressToNextLevel: number;
+    badgesCount: number;
+    achievementsCount: number;
+  };
+  // 4. Progreso Curricular Jerárquico
+  curricularProgress: CurricularProgressCompetency[];
+  // 5. Estado de Evidencias
+  evidences: EvidenceProgressItem[];
+  // 6. Asistencia y Justificaciones
+  attendances: AttendanceRecord[];
+  justifications: Justification[];
+  attentionCalls: AttentionCall[];
+  // 7. Gamificación & Insignias
+  badges: Array<BadgeDefinition & { unlocked: boolean; unlockedAt?: string }>;
+  achievements: Array<AchievementDefinition & { unlocked: boolean; unlockedAt?: string }>;
+  learnerRecords: LearnerRecord[];
+}
+
+// ==========================================
+// 19. CALENDARIO ACADÉMICO Y AGENDA (PROMPT 18)
+// ==========================================
+export type CalendarEventType =
+  | 'ACTIVITY'
+  | 'DUE_DATE'
+  | 'ANNOUNCEMENT'
+  | 'ATTENDANCE'
+  | 'ACADEMIC_EVENT';
+
+export type CalendarActivityStatus =
+  | 'completed' // 🟢 Completada (evidencia entregada y aprobada/completa)
+  | 'pending' // 🟡 Pendiente (asignada sin entrega)
+  | 'overdue' // 🔴 Vencida (fecha pasada sin entrega válida)
+  | 'correction' // 🔵 En corrección (con estado C)
+  | 'no_date'; // ⚪ Sin fecha (sin fecha límite)
+
+export interface CalendarEventItem {
+  id: string;
+  title: string;
+  description?: string;
+  type: CalendarEventType;
+  startDate: Date;
+  endDate?: Date;
+  allDay?: boolean;
+  relatedId?: string;
+  relatedType?: 'activity' | 'announcement' | 'attendance' | 'course';
+  fichaId?: string;
+  fichaNumber?: string;
+  courseId?: string;
+  courseName?: string;
+  activityId?: string;
+  status?: CalendarActivityStatus | string;
+  points?: number;
+  priority?: string;
+  submissionStatus?: string;
+  submissionId?: string;
+  instructorName?: string;
+  isOverdue?: boolean;
+  dueLabel?: string; // "Due today", "Due tomorrow", "Due in 2 days", "Overdue"
+  rawActivity?: EvidenceActivity;
+  rawAnnouncement?: Announcement;
+  rawAttendance?: AttendanceRecord;
+}
+
+export interface InstructorCalendarStats {
+  dueTodayCount: number;
+  thisWeekCount: number;
+  pendingReviewCount: number;
+  overdueCount: number;
+  totalActivities: number;
+}
+
+// ==========================================
+// 20. RÚBRICAS Y CRITERIOS DE EVALUACIÓN (PROMPT 19)
+// ==========================================
+
+export type RubricPerformanceLevelName =
+  | 'EXCELLENT'
+  | 'GOOD'
+  | 'BASIC'
+  | 'NEEDS_IMPROVEMENT'
+  | string;
+
+export interface RubricLevel {
+  id: string; // levelId
+  name: RubricPerformanceLevelName;
+  description: string;
+  points: number; // Puntos asignados al nivel (ej: 25, 20, 15, 10)
+  percentageRange?: string; // Ej: "90–100%", "80–89%", etc.
+  order: number;
+}
+
+export interface RubricCriterion {
+  id: string; // criterionId
+  rubricId: string;
+  title: string; // Ej: "Pronunciación", "Vocabulario", "Gramática", "Fluidez"
+  description: string;
+  weight: number; // Porcentaje del criterio (ej: 25 para 25%). La suma debe ser 100%.
+  order: number;
+  levels: RubricLevel[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Rubric {
+  id: string; // rubricId
+  activityId?: string | null; // ID de la actividad asociada (1 rúbrica = 1 actividad)
+  activityTitle?: string;
+  createdBy: string; // UID del instructor creador
+  creatorName?: string;
+  fichaId: string; // Ficha asignada
+  fichaNumber?: string;
+  courseId?: string;
+  title: string;
+  description: string;
+  totalPoints: number; // Generalmente 100
+  criteria: RubricCriterion[];
+  isPublished: boolean; // Solo visible para evaluar y para aprendices si está publicada
+  evaluationCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RubricCriterionResult {
+  criterionId: string;
+  criterionTitle: string;
+  weight: number;
+  levelId: string;
+  levelName: string;
+  points: number; // Puntos asignados
+  maxPoints: number; // Puntos máximos para este criterio
+  comment?: string; // Comentario específico del criterio
+}
+
+export interface RubricEvaluation {
+  id: string; // evaluationId
+  rubricId: string;
+  rubricTitle?: string;
+  activityId: string;
+  submissionId: string;
+  learnerId: string; // UID del aprendiz
+  learnerName?: string;
+  fichaId: string;
+  evaluatorId: string; // UID del instructor evaluador
+  evaluatorName?: string;
+  version: number; // Versión de la entrega (Version 1, Version 2, etc.)
+  criteriaResults: RubricCriterionResult[];
+  totalPoints: number; // Suma de puntos obtenidos
+  totalPossiblePoints: number; // Puntos máximos posibles (ej: 100)
+  percentage: number; // Porcentaje calculado (ej: 83)
+  generalFeedback?: string; // Retroalimentación pedagógica complementaria
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// 21. CENTRO DE RECURSOS Y MATERIALES DIDÁCTICOS (PROMPT 20)
+// ==========================================
+
+export type ResourceType =
+  | 'PDF'
+  | 'DOCUMENT'
+  | 'PRESENTATION'
+  | 'SPREADSHEET'
+  | 'IMAGE'
+  | 'VIDEO'
+  | 'AUDIO'
+  | 'YOUTUBE'
+  | 'CANVA'
+  | 'EXTERNAL_LINK'
+  | 'DRIVE_FILE';
+
+export type ResourceVisibility =
+  | 'ALL'
+  | 'PROGRAM'
+  | 'FICHA'
+  | 'COURSE'
+  | 'COMPETENCY'
+  | 'RAP'
+  | 'ACTIVITY';
+
+export type ResourceStatus = 'draft' | 'published' | 'archived';
+
+export interface Resource {
+  id: string; // resourceId
+  title: string;
+  description?: string;
+  resourceType: ResourceType;
+
+  // Autoría
+  createdBy: string; // UID del instructor creador
+  creatorName?: string;
+  creatorEmail?: string;
+
+  // Ámbito Académico Jerárquico (Opcionales para máxima flexibilidad)
+  centerId?: string;
+  centerName?: string;
+  programId?: string;
+  programName?: string;
+  fichaId?: string;
+  fichaNumber?: string;
+  courseId?: string;
+  courseName?: string;
+  competencyId?: string;
+  competencyName?: string;
+  learningOutcomeId?: string;
+  learningOutcomeCode?: string;
+  activityId?: string;
+  activityTitle?: string;
+
+  // Archivo o Enlace
+  driveFileId?: string;
+  driveUrl?: string;
+  externalUrl?: string;
+
+  // Metadatos de archivo
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
+  thumbnailUrl?: string;
+
+  // Publicación y Visibilidad
+  isPublished: boolean;
+  status: ResourceStatus;
+  visibility: ResourceVisibility;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+

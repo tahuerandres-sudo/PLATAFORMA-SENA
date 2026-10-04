@@ -103,4 +103,13 @@ export const fichaService = {
 
     return updated;
   },
+
+  /**
+   * Verifica si un instructor está asignado a una ficha
+   */
+  async isInstructorAssignedToFicha(fichaId: string, instructorId: string): Promise<boolean> {
+    const ficha = await this.getFichaById(fichaId);
+    if (!ficha) return false;
+    return Boolean(ficha.instructorIds?.includes(instructorId));
+  },
 };
