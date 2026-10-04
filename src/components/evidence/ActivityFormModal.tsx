@@ -53,6 +53,7 @@ interface ActivityFormModalProps {
   onClose: () => void;
   onActivitySaved: (activity: EvidenceActivity) => void;
   initialActivity?: EvidenceActivity | null;
+  defaultFichaId?: string;
 }
 
 export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
@@ -60,6 +61,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
   onClose,
   onActivitySaved,
   initialActivity,
+  defaultFichaId,
 }) => {
   const { userProfile, currentUser } = useAuth();
   const instructorUid = currentUser?.uid || userProfile?.uid || '';
@@ -167,12 +169,21 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
           );
         } else {
           // Valores iniciales
-          const initialProg = progs[0]?.id || '';
-          setProgramId(initialProg);
+          let initialProg = progs[0]?.id || '';
+          let initialFicha = fList[0]?.id || '';
 
-          // Fichas correspondientes al programa inicial
-          const matchingFichas = fList.filter((f) => f.programId === initialProg);
-          const initialFicha = matchingFichas[0]?.id || fList[0]?.id || '';
+          if (defaultFichaId) {
+            const matchedFicha = fList.find((f) => f.id === defaultFichaId || f.number === defaultFichaId);
+            if (matchedFicha) {
+              initialFicha = matchedFicha.id;
+              if (matchedFicha.programId) initialProg = matchedFicha.programId;
+            }
+          } else {
+            const matchingFichas = fList.filter((f) => f.programId === initialProg);
+            initialFicha = matchingFichas[0]?.id || fList[0]?.id || '';
+          }
+
+          setProgramId(initialProg);
           setFichaId(initialFicha);
 
           // Fecha límite sugerida: 2 semanas a partir de hoy
@@ -190,7 +201,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
     if (isOpen) {
       initCatalog();
     }
-  }, [isOpen, initialActivity, instructorUid]);
+  }, [isOpen, initialActivity, instructorUid, defaultFichaId]);
 
   // Filtro en Cascada 1: Fichas disponibles según el Programa seleccionado
   const availableFichas = useMemo(() => {
@@ -294,11 +305,6 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       return;
     }
 
-    if (!courseId) {
-      setErrorMessage('Debes asociar la actividad a un Curso formativo.');
-      return;
-    }
-
     if (!competencyId) {
       setErrorMessage('Debes asociar la actividad a una Competencia del programa.');
       return;
@@ -335,16 +341,16 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
     const now = new Date().toISOString();
     const activityId = initialActivity?.id || `act_${Date.now()}`;
 
-    // Actividad que respeta toda la relación: Programa -> Ficha -> Curso -> Competencia -> RAP (Sección 12 y 13)
+    // Actividad directamente vinculada a la Ficha (PROMPT 22)
     const newActivity: EvidenceActivity = {
       id: activityId,
       title: title.trim(),
       name: title.trim(),
       description: description.trim(),
       instructions: instructions.trim(),
-      programId,
+      programId: programId || undefined,
       fichaId,
-      courseId,
+      courseId: courseId || undefined,
       competencyId,
       learningOutcomeId,
       learningOutcomeIds: learningOutcomeId ? [learningOutcomeId] : [], // Soporte multi-RAP (Sección 13)
@@ -489,16 +495,17 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
                 </select>
               </div>
 
-              {/* 3. Curso / Ambiente */}
+              {/* 3. Curso / Ambiente (Opcional) */}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  3. Curso / Asignatura *
+                  3. Curso / Ambiente (Opcional)
                 </label>
                 <select
                   value={courseId}
                   onChange={(e) => setCourseId(e.target.value)}
                   className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
                 >
+                  <option value="">Directo a la ficha (Sin curso)</option>
                   {coursesForFicha.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name} ({c.code})

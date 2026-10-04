@@ -139,6 +139,10 @@ export const submissionService = {
       })
       .catch((e) => console.warn('[submissionService] Error notificando entrega a instructor:', e));
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
     return fullSubmission;
   },
 
@@ -148,11 +152,23 @@ export const submissionService = {
    * las consultas estrictamente a las fichas asignadas al instructor (Instructor -> Fichas Asignadas -> Submissions).
    */
   async getAllSubmissions(
-    instructorId?: string,
+    instructorIdOrFilter?: string | { fichaId?: string; instructorId?: string },
     assignedFichaIds?: string[]
   ): Promise<{ data: AcademicSubmission[]; isDemo: boolean; error?: string }> {
     try {
-      let targetFichaIds: string[] = assignedFichaIds ? [...assignedFichaIds] : [];
+      let targetFichaIds: string[] = [];
+      let instructorId: string | undefined;
+
+      if (typeof instructorIdOrFilter === 'object' && instructorIdOrFilter !== null) {
+        instructorId = instructorIdOrFilter.instructorId;
+        if (instructorIdOrFilter.fichaId) {
+          targetFichaIds = [instructorIdOrFilter.fichaId];
+        }
+      } else {
+        instructorId = instructorIdOrFilter;
+        targetFichaIds = assignedFichaIds ? [...assignedFichaIds] : [];
+      }
+
       const effectiveInstructorId = instructorId || auth.currentUser?.uid;
 
       // Si no se proporcionaron fichas específicas, obtener las asignadas al instructor
@@ -531,6 +547,10 @@ export const submissionService = {
           }).catch((e) => console.warn('[submissionService] Error en gamificación Actividad Completada:', e));
         }
       }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
     }
 
     return updatedSubmission;

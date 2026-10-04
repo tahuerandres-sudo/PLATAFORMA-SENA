@@ -26,7 +26,15 @@ service cloud.firestore {
         && fichaId != null
         && fichaId != ''
         && exists(/databases/$(database)/documents/fichas/$(fichaId))
-        && request.auth.uid in get(/databases/$(database)/documents/fichas/$(fichaId)).data.instructorIds;
+        && (
+          (
+            'instructorIds' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
+            && request.auth.uid in get(/databases/$(database)/documents/fichas/$(fichaId)).data.instructorIds
+          ) || (
+            'createdBy' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
+            && get(/databases/$(database)/documents/fichas/$(fichaId)).data.createdBy == request.auth.uid
+          )
+        );
     }
 
     // Regla de Colección: /users
@@ -106,21 +114,60 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Matrículas (Enrollments)
+    // Matrículas (Enrollments) — PROMPT 21: Asignación Exclusiva por Instructor y Activación Segura por Gmail
     match /enrollments/{enrollmentId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (
-        request.resource.data.userId == request.auth.uid ||
-        request.resource.data.apprenticeId == request.auth.uid ||
-        isInstructor()
-      );
-      allow update: if isInstructor() || (
-        isAuthenticated() && (
+      // Lectura autorizada:
+      // - Instructor asignado a la ficha de la matrícula o instructor creador
+      // - Aprendiz: Solo si la matrícula le pertenece por UID o por su correo oficial de Google
+      allow read: if isAuthenticated() && (
+        (isInstructor() && (
+          isFichaInstructor(resource.data.fichaId) ||
+          ('assignedBy' in resource.data && resource.data.assignedBy == request.auth.uid)
+        )) ||
+        (
           resource.data.userId == request.auth.uid ||
-          resource.data.apprenticeId == request.auth.uid
+          resource.data.learnerId == request.auth.uid ||
+          (
+            'learnerEmail' in resource.data &&
+            request.auth.token.email != null &&
+            resource.data.learnerEmail == request.auth.token.email
+          )
         )
       );
-      allow delete: if false;
+
+      // Creación: ÚNICAMENTE un instructor asignado a la ficha.
+      // El aprendiz tiene TERMINANTEMENTE PROHIBIDO crear enrollments por cuenta propia.
+      allow create: if isInstructor()
+                    && ('fichaId' in request.resource.data)
+                    && isFichaInstructor(request.resource.data.fichaId)
+                    && ('programId' in request.resource.data)
+                    && ('learnerEmail' in request.resource.data || 'userId' in request.resource.data || 'learnerId' in request.resource.data);
+
+      // Actualización:
+      // 1. Instructor asignado a la ficha (no puede alterar fichaId ni programId de una matrícula existente)
+      // 2. Aprendiz: ÚNICAMENTE para activar su propia matrícula PENDING vinculando su UID si el correo de Google coincide exactamente
+      allow update: if isAuthenticated() && (
+        // Caso A: Instructor asignado a la ficha
+        (
+          isInstructor()
+          && isFichaInstructor(resource.data.fichaId)
+          && request.resource.data.fichaId == resource.data.fichaId
+          && request.resource.data.programId == resource.data.programId
+        ) ||
+        // Caso B: Aprendiz reclamando su matrícula pendiente asignada por el instructor
+        (
+          request.auth.token.email != null
+          && 'learnerEmail' in resource.data
+          && resource.data.learnerEmail == request.auth.token.email
+          && (request.resource.data.userId == request.auth.uid || request.resource.data.learnerId == request.auth.uid)
+          && request.resource.data.fichaId == resource.data.fichaId
+          && request.resource.data.programId == resource.data.programId
+          && (!('assignedBy' in resource.data) || request.resource.data.assignedBy == resource.data.assignedBy)
+        )
+      );
+
+      // Eliminación: Solo instructor asignado a la ficha
+      allow delete: if isInstructor() && isFichaInstructor(resource.data.fichaId);
     }
 
     // Actividades de Formación

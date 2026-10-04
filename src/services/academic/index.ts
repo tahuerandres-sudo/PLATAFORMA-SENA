@@ -18,3 +18,4 @@ export * from './gamificationService';
 export * from './calendarService';
 export * from './rubricService';
 export * from './resourceService';
+export * from './sidebarMetricsService';

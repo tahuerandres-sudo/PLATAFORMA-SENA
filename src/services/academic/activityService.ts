@@ -142,6 +142,10 @@ export const activityService = {
         }).catch((e) => console.warn('[activityService] Error notificando actualización de actividad:', e));
       }
     }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
   },
 
   /**
@@ -182,6 +186,10 @@ export const activityService = {
           courseName: (act as any).courseName,
         }).catch((e) => console.warn('[activityService] Error notificando publicación de actividad:', e));
       }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
     }
   },
 

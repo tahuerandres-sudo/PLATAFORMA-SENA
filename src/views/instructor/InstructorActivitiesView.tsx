@@ -105,11 +105,13 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
 
       // Si el instructor tiene fichas asignadas específicas, acotar actividades a dichas fichas
       const assignedFichaIds = loadedFichas.map((f) => f.id);
-      let relevantActs = actsRes.data;
+      let relevantActs: EvidenceActivity[] = [];
       if (assignedFichaIds.length > 0) {
         relevantActs = actsRes.data.filter(
           (a) => assignedFichaIds.includes(a.fichaId) || a.createdBy === instructorUid
         );
+      } else {
+        relevantActs = actsRes.data.filter((a) => a.createdBy === instructorUid);
       }
       setActivities(relevantActs);
 

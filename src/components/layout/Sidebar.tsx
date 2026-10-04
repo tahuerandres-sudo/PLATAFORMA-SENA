@@ -3,7 +3,7 @@
  * SENA Learning Hub - Responsive Desktop & Tablet Sidebar
  */
 
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Home,
   BookOpen,
@@ -30,6 +30,12 @@ import {
   User,
 } from 'lucide-react';
 import { ActiveRole } from './Header';
+import { useAuth } from '../../hooks/useAuth';
+import {
+  sidebarMetricsService,
+  InstructorSidebarMetrics,
+  ApprenticeSidebarMetrics,
+} from '../../services/academic/sidebarMetricsService';
 
 export interface NavItemConfig {
   id: string;
@@ -53,26 +59,100 @@ export const Sidebar: React.FC<SidebarProps> = ({
   unreadNotificationsCount,
   className = '',
 }) => {
-  const notifBadge =
-    typeof unreadNotificationsCount === 'number' && unreadNotificationsCount > 0
-      ? String(unreadNotificationsCount)
-      : undefined;
+  const { currentUser, userProfile } = useAuth();
+  const currentUid = currentUser?.uid || userProfile?.uid || '';
 
-  // Menú oficial y ordenado para el Instructor (Prompt 3 - Requisito 22)
+  // Estados de métricas en tiempo real (inicialmente null para evitar flash de contadores)
+  const [instructorMetrics, setInstructorMetrics] = useState<InstructorSidebarMetrics | null>(null);
+  const [apprenticeMetrics, setApprenticeMetrics] = useState<ApprenticeSidebarMetrics | null>(null);
+
+  const fetchMetrics = useCallback(
+    async (forceRefresh = false) => {
+      if (!currentUid) {
+        setInstructorMetrics(null);
+        setApprenticeMetrics(null);
+        return;
+      }
+
+      if (currentRole === 'instructor') {
+        const metrics = await sidebarMetricsService.getInstructorMetrics(currentUid, forceRefresh);
+        setInstructorMetrics(metrics);
+      } else {
+        const metrics = await sidebarMetricsService.getApprenticeMetrics(currentUid, forceRefresh);
+        setApprenticeMetrics(metrics);
+      }
+    },
+    [currentUid, currentRole]
+  );
+
+  useEffect(() => {
+    fetchMetrics();
+
+    // Suscribirse a eventos de actualización de datos en el sistema
+    const unsubscribeService = sidebarMetricsService.subscribe(() => {
+      fetchMetrics(true);
+    });
+
+    const handleCustomEvent = () => {
+      fetchMetrics(true);
+    };
+
+    window.addEventListener('sena_sidebar_metrics_updated', handleCustomEvent);
+
+    return () => {
+      unsubscribeService();
+      window.removeEventListener('sena_sidebar_metrics_updated', handleCustomEvent);
+    };
+  }, [fetchMetrics]);
+
+  // Refrescar al cambiar de vista activa (para reflejar creaciones de evidencias/actividades al volver al menú)
+  useEffect(() => {
+    fetchMetrics(false);
+  }, [activeView, fetchMetrics]);
+
+  /**
+   * REGLA PROMPT 20.1:
+   * UN CONTADOR SOLO SE MUESTRA SI REPRESENTA UN REGISTRO REAL VISIBLE.
+   * Si es null (cargando) o <= 0 -> NO MOSTRAR BADGE (undefined).
+   */
+  const formatBadge = (val: number | null | undefined): string | undefined => {
+    if (typeof val === 'number' && val > 0) {
+      return String(val);
+    }
+    return undefined;
+  };
+
+  const notifBadge = formatBadge(unreadNotificationsCount);
+
+  // Menú oficial y ordenado para el Instructor con contadores 100% reales (PROMPT 22: Fichas como Clases Principales)
   const instructorNavItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
-    { id: 'courses', label: 'Mis cursos', icon: BookOpen },
-    { id: 'fichas', label: 'Mis fichas', icon: Users, badge: '4' },
-    { id: 'apprentices', label: 'Aprendices y Expedientes', icon: UserCheck, badge: '128' },
+    { id: 'fichas', label: 'Mis fichas', icon: Users, badge: formatBadge(instructorMetrics?.fichasCount) },
+    {
+      id: 'apprentices',
+      label: 'Aprendices y Expedientes',
+      icon: UserCheck,
+      badge: formatBadge(instructorMetrics?.apprenticesCount),
+    },
     { id: 'competencies', label: 'Competencias', icon: Target },
     { id: 'learning_outcomes', label: 'Resultados de aprendizaje', icon: ListOrdered },
-    { id: 'activities', label: 'Actividades', icon: FileText, badge: '4' },
+    { id: 'activities', label: 'Actividades', icon: FileText, badge: formatBadge(instructorMetrics?.activitiesCount) },
     { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
-    { id: 'submissions', label: 'Evidencias', icon: FolderArchive, badge: '4' },
+    {
+      id: 'submissions',
+      label: 'Evidencias',
+      icon: FolderArchive,
+      badge: formatBadge(instructorMetrics?.submissionsCount),
+    },
     { id: 'grades', label: 'Calificaciones', icon: Award },
     { id: 'attendance', label: 'Asistencia', icon: CalendarCheck },
     { id: 'tracking', label: 'Seguimiento', icon: ClipboardList },
-    { id: 'attention_calls', label: 'Llamados de atención', icon: AlertTriangle, badge: '2' },
+    {
+      id: 'attention_calls',
+      label: 'Llamados de atención',
+      icon: AlertTriangle,
+      badge: formatBadge(instructorMetrics?.attentionCallsCount),
+    },
     { id: 'reports', label: 'Reportes', icon: BarChart3 },
     { id: 'announcements', label: 'Anuncios', icon: Megaphone },
     { id: 'gamification', label: 'Gamificación', icon: Gamepad2 },
@@ -83,8 +163,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const apprenticeNavItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
-    { id: 'courses', label: 'Mis cursos', icon: BookOpen },
-    { id: 'activities', label: 'Mis actividades', icon: FileText, badge: '2' },
+    { id: 'fichas', label: 'Mis fichas', icon: Users },
+    {
+      id: 'activities',
+      label: 'Mis actividades',
+      icon: FileText,
+      badge: formatBadge(apprenticeMetrics?.activitiesCount),
+    },
     { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
     { id: 'submissions', label: 'Mis evidencias', icon: FolderArchive },
     { id: 'grades', label: 'Mis calificaciones', icon: Award },

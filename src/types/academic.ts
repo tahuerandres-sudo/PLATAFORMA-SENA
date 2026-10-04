@@ -59,6 +59,7 @@ export interface Ficha {
   id: string;
   number: string; // Número de ficha único SENA, Ej: "3409626"
   name?: string; // Nombre descriptivo opcional
+  description?: string;
   programName?: string;
   centerName?: string;
   programId: string;
@@ -70,6 +71,7 @@ export interface Ficha {
   shift: FichaShift; // morning | afternoon | evening
   stage: FichaStage; // induction | lectiva | productive | completed
   academicStage?: string;
+  createdBy?: string; // UID del instructor creador
   createdAt: string;
   updatedAt: string;
 }
@@ -165,6 +167,7 @@ export interface FichaCompetency {
 // ==========================================
 export type EnrollmentStatus =
   | 'active'
+  | 'pending'
   | 'inactive'
   | 'completed'
   | 'withdrawn'
@@ -172,14 +175,19 @@ export type EnrollmentStatus =
 
 export interface Enrollment {
   id: string;
-  userId: string; // Ref a /users/{uid}
-  learnerId?: string; // Ref canónica a aprendiz (Sección 7)
-  apprenticeId?: string; // Alias para compatibilidad de queries
+  userId: string; // Ref a /users/{uid} (puede ser cadena vacía si es pending)
+  learnerId?: string | null; // Ref canónica a aprendiz
+  apprenticeId?: string | null; // Alias para compatibilidad de queries
+  learnerEmail?: string; // Correo de Google del aprendiz registrado por el instructor
   fichaId: string; // Ref a /fichas/{id}
   programId: string; // Ref a /trainingPrograms/{id}
   centerId: string; // Ref a /trainingCenters/{id}
   courseId?: string; // Opcional si la matrícula es a un curso específico
   status: EnrollmentStatus;
+  assignedBy?: string; // UID del instructor que asignó la matrícula
+  assignedByName?: string; // Nombre del instructor
+  assignedAt?: string;
+  activatedAt?: string;
   enrollmentDate: string; // ISO-8601
   enrolledAt?: string; // Alias para compatibilidad de fecha
   completionDate?: string | null;
@@ -205,13 +213,15 @@ export interface ApprenticeWithEnrollment {
   phone?: string;
   status: 'active' | 'inactive' | 'pending' | 'blocked';
   enrollmentId: string;
-  enrollmentStatus: 'active' | 'inactive' | 'completed' | 'withdrawn' | 'suspended';
+  enrollmentStatus: EnrollmentStatus;
   programName: string;
   fichaId?: string;
   fichaNumber: string;
   courseName: string;
   progressPercent: number;
   averageGrade: string; // 'A' | 'N' | 'C' | 'N/A'
+  assignedAt?: string;
+  assignedByName?: string;
 
   // Métricas preparadas
   attendanceRate: number;
@@ -264,7 +274,7 @@ export interface EvidenceActivity {
   name?: string; // Alias para compatibilidad
   description: string;
   programId?: string; // Ref a programa de formación
-  courseId: string;
+  courseId?: string;
   fichaId: string;
   competencyId: string;
   learningOutcomeId: string;

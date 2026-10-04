@@ -17,6 +17,7 @@ import {
   translateAuthError,
 } from '../services/firebase/authService';
 import { UserProfile, RegisterPayload, UpdateProfilePayload } from '../types/auth';
+import { enrollmentService } from '../services/academic/enrollmentService';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -72,6 +73,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const profile = await getUserProfileFromFirestore(user);
           setUserProfile(profile);
+
+          // PROMPT 21: Si el usuario es aprendiz, activar automáticamente cualquier matrícula pendiente vinculada a su correo
+          if (profile && profile.role === 'apprentice' && user.email) {
+            try {
+              const activated = await enrollmentService.activatePendingEnrollmentsForUser({
+                uid: user.uid,
+                email: user.email,
+                displayName: user.displayName || profile.displayName,
+              });
+              if (activated && activated.length > 0) {
+                const refreshed = await getUserProfileFromFirestore(user);
+                setUserProfile(refreshed);
+              }
+            } catch (e) {
+              console.warn('[Auth] Activación automática de matrículas:', e);
+            }
+          }
         } catch (err: any) {
           console.error('[Auth] Error al cargar perfil:', err);
           setAuthError(translateAuthError(err));

@@ -86,11 +86,14 @@ export const ApprenticeActivitiesView: React.FC = () => {
       setLearningOutcomes(rapsRes.data || []);
       setCourses(coursesList || []);
 
-      // Filtrar actividades: Solo de su ficha/programa y que no estén en borrador (Requisitos 7 y 8)
-      let visibleActivities = actRes.data.filter((a) => a.status !== 'draft');
+      // Filtrar actividades: Solo de su ficha/programa y que no estén en borrador (PROMPT 21)
+      // NINGÚN APRENDIZ TIENE ACCESO ACADÉMICO POR DEFECTO.
+      let visibleActivities: EvidenceActivity[] = [];
       if (enr?.fichaId) {
-        visibleActivities = visibleActivities.filter(
-          (a) => a.fichaId === enr.fichaId || a.fichaId === (enr as any).fichaNumber
+        visibleActivities = actRes.data.filter(
+          (a) =>
+            a.status !== 'draft' &&
+            (a.fichaId === enr.fichaId || a.fichaId === (enr as any).fichaNumber)
         );
       }
       setActivities(visibleActivities);
@@ -282,6 +285,23 @@ export const ApprenticeActivitiesView: React.FC = () => {
       {loading ? (
         <div className="py-12 text-center text-xs text-slate-500">
           Cargando actividades formativas asignadas...
+        </div>
+      ) : !enrollment?.fichaId ? (
+        <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-12 text-center max-w-xl mx-auto space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
+            <AlertCircle className="w-7 h-7" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-base font-bold text-[#00324D]">
+              No tienes una ficha asignada actualmente.
+            </h3>
+            <p className="text-xs text-slate-600 font-medium leading-relaxed">
+              Solicita a tu instructor que registre tu correo Gmail para darte acceso.
+            </p>
+          </div>
+          <p className="text-[11px] text-slate-400 italic">
+            Una vez que tu instructor registre tu correo, tus actividades formativas y evidencias se habilitarán inmediatamente.
+          </p>
         </div>
       ) : filteredActivities.length === 0 ? (
         <div className="bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center space-y-2">

@@ -181,7 +181,7 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
           enrollmentId: enrollment?.id || '',
           fichaId: activity.fichaId,
           programId: activity.programId || enrollment?.programId || '',
-          courseId: activity.courseId,
+          courseId: activity.courseId || '',
           competencyId: activity.competencyId,
           learningOutcomeId: activity.learningOutcomeId,
           submittedAt: now,

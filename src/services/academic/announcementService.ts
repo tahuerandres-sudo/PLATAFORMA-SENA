@@ -297,4 +297,41 @@ export const announcementService = {
       console.warn('[announcementService] Error eliminando anuncio:', err);
     }
   },
+
+  /**
+   * Obtiene anuncios según filtros (fichaId, targetType, targetId, etc.)
+   */
+  async getAnnouncements(params?: {
+    fichaId?: string;
+    targetType?: string;
+    targetId?: string;
+  }): Promise<Announcement[]> {
+    const fichaId = params?.fichaId || (params?.targetType === 'FICHA' ? params?.targetId : undefined);
+    try {
+      const q = query(collection(db, COLLECTION));
+      const snap = await getDocs(q);
+      let list = snap.docs.map((d) => d.data() as Announcement);
+      inMemoryAnnouncements.forEach((m) => {
+        if (!list.some((item) => item.id === m.id)) {
+          list.push(m);
+        }
+      });
+      if (fichaId) {
+        list = list.filter(
+          (a) =>
+            a.targetIds?.includes(fichaId) ||
+            a.fichaIds?.includes(fichaId) ||
+            a.targetType === 'ALL'
+        );
+      }
+      return list.sort(
+        (a, b) => new Date(b.publishedAt || b.createdAt).getTime() - new Date(a.publishedAt || a.createdAt).getTime()
+      );
+    } catch (err) {
+      console.warn('[announcementService] Error en getAnnouncements:', err);
+      return inMemoryAnnouncements.filter((a) =>
+        fichaId ? a.targetIds?.includes(fichaId) || a.fichaIds?.includes(fichaId) || a.targetType === 'ALL' : true
+      );
+    }
+  },
 };

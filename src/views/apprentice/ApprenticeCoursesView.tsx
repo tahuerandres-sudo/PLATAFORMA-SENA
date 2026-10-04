@@ -29,7 +29,7 @@ export const ApprenticeCoursesView: React.FC<ApprenticeCoursesViewProps> = ({
       setLoading(true);
       setErrorMsg(null);
       try {
-        const list = await getEnrollmentsForApprentice(currentUser.uid);
+        const list = await getEnrollmentsForApprentice(currentUser.uid, currentUser.email || undefined);
         setEnrollments(list);
       } catch (err: any) {
         console.warn('[ApprenticeCoursesView] Aviso al cargar cursos:', err);
@@ -81,17 +81,27 @@ export const ApprenticeCoursesView: React.FC<ApprenticeCoursesViewProps> = ({
           <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
           <p className="text-xs font-semibold text-slate-600">Consultando competencias en Firestore...</p>
         </div>
+      ) : enrollments.length === 0 ? (
+        <div className="py-16 text-center space-y-3 bg-white rounded-xl border border-dashed border-slate-300 p-8 max-w-md mx-auto">
+          <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+            <BookOpen className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-800">No tienes una ficha asignada actualmente.</h3>
+            <p className="text-xs text-slate-600 font-medium mt-1">
+              Solicita a tu instructor que registre tu correo Gmail para darte acceso.
+            </p>
+          </div>
+        </div>
       ) : allCourses.length === 0 ? (
         <div className="py-16 text-center space-y-3 bg-white rounded-xl border border-dashed border-slate-300 p-8 max-w-md mx-auto">
           <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
             <BookOpen className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-800">No tienes competencias o cursos asignados</h3>
+            <h3 className="text-sm font-bold text-slate-800">No hay competencias configuradas en tu ficha</h3>
             <p className="text-xs text-slate-500 mt-1">
-              {enrollments.length === 0
-                ? 'No tienes una matrícula activa en /enrollments actualmente.'
-                : 'Tu ficha activa aún no tiene registros asociados en /fichaCourses.'}
+              Tu ficha aún no tiene competencias registradas en el catálogo académico.
             </p>
           </div>
         </div>

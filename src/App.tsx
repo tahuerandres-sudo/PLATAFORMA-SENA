@@ -18,7 +18,6 @@ import { CompleteProfileModal } from './views/auth/CompleteProfileModal';
 
 // Vistas del Instructor
 import { InstructorDashboard } from './views/instructor/InstructorDashboard';
-import { InstructorCoursesView } from './views/instructor/InstructorCoursesView';
 import { InstructorFichasView } from './views/instructor/InstructorFichasView';
 import { InstructorApprenticesView } from './views/instructor/InstructorApprenticesView';
 import { InstructorCompetenciesView } from './views/instructor/InstructorCompetenciesView';
@@ -39,7 +38,7 @@ import { InstructorSettingsView } from './views/instructor/InstructorSettingsVie
 
 // Vistas del Aprendiz
 import { ApprenticeDashboard } from './views/apprentice/ApprenticeDashboard';
-import { ApprenticeCoursesView } from './views/apprentice/ApprenticeCoursesView';
+import { ApprenticeFichasView } from './views/apprentice/ApprenticeFichasView';
 import { ApprenticeActivitiesView } from './views/apprentice/ApprenticeActivitiesView';
 import { ApprenticeCalendarView } from './views/apprentice/ApprenticeCalendarView';
 import { ApprenticeSubmissionsView } from './views/apprentice/ApprenticeSubmissionsView';
@@ -110,9 +109,8 @@ function AppContent() {
   const handleNavigate = (viewId: string) => {
     setAccessDeniedWarning(null);
 
-    // Lista de vistas exclusivas del instructor
+    // Lista de vistas exclusivas del instructor (PROMPT 22: Fichas ahora es común a ambos roles)
     const instructorOnlyViews = [
-      'fichas',
       'apprentices',
       'competencies',
       'learning_outcomes',
@@ -122,14 +120,15 @@ function AppContent() {
       'reports',
       'stats',
     ];
-    if (isApprentice && instructorOnlyViews.includes(viewId)) {
+    const targetView = viewId === 'courses' ? 'fichas' : viewId;
+    if (isApprentice && instructorOnlyViews.includes(targetView)) {
       setAccessDeniedWarning(
-        `Acceso denegado: La sección "${viewId}" está restringida únicamente a Instructores autorizados.`
+        `Acceso denegado: La sección "${targetView}" está restringida únicamente a Instructores autorizados.`
       );
       return;
     }
 
-    setActiveView(viewId);
+    setActiveView(targetView);
   };
 
   // 1. Estado de Carga Inicial
@@ -284,11 +283,6 @@ function AppContent() {
                   onOpenCreateFicha={() => handleNavigate('fichas')}
                 />
               )}
-              {activeView === 'courses' && (
-                <InstructorCoursesView
-                  onNavigateToActivities={() => handleNavigate('activities')}
-                />
-              )}
               {activeView === 'fichas' && (
                 <InstructorFichasView
                   onSelectFicha={() => handleNavigate('apprentices')}
@@ -334,10 +328,8 @@ function AppContent() {
                   onOpenActivity={() => handleNavigate('activities')}
                 />
               )}
-              {activeView === 'courses' && (
-                <ApprenticeCoursesView
-                  onNavigateToActivities={() => handleNavigate('activities')}
-                />
+              {activeView === 'fichas' && (
+                <ApprenticeFichasView onNavigateToView={handleNavigate} />
               )}
               {activeView === 'activities' && <ApprenticeActivitiesView />}
               {activeView === 'calendar' && (

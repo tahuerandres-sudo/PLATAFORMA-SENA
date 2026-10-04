@@ -433,6 +433,10 @@ export const trackingService = {
       console.warn('[trackingService] Aviso creando notificación:', err);
     }
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
     return finalCall;
   },
 

@@ -31,9 +31,7 @@ export const fichaService = {
   ): Promise<{ data: Ficha[]; isDemo: boolean; error?: string }> {
     try {
       let q = collection(db, COLLECTION);
-      const snap = instructorId
-        ? await getDocs(query(q, where('instructorIds', 'array-contains', instructorId)))
-        : await getDocs(q);
+      const snap = await getDocs(q);
 
       if (!snap.empty) {
         const fromDb = snap.docs.map((d) => d.data() as Ficha);
@@ -42,14 +40,22 @@ export const fichaService = {
           ...fromDb,
         ];
         const filtered = instructorId
-          ? merged.filter((f) => f.instructorIds?.includes(instructorId))
+          ? merged.filter(
+              (f) =>
+                f.instructorIds?.includes(instructorId) ||
+                (f as any).createdBy === instructorId
+            )
           : merged;
         return { data: filtered, isDemo: false };
       }
 
       // Colección vacía en Firestore -> Retornar [] sin inventar datos
       const filtered = instructorId
-        ? inMemoryFichas.filter((f) => f.instructorIds?.includes(instructorId))
+        ? inMemoryFichas.filter(
+            (f) =>
+              f.instructorIds?.includes(instructorId) ||
+              (f as any).createdBy === instructorId
+          )
         : inMemoryFichas;
       return { data: filtered, isDemo: false };
     } catch (error) {
@@ -99,6 +105,10 @@ export const fichaService = {
       await setDoc(doc(db, COLLECTION, ficha.id), updated, { merge: true });
     } catch (err) {
       console.warn('[fichaService] Aviso guardando ficha en Firestore:', err);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
     }
 
     return updated;

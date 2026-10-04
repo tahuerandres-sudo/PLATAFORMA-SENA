@@ -305,35 +305,41 @@ export async function getCoursesForFicha(fichaId: string): Promise<Course[]> {
 // ==========================================
 
 /**
- * Obtiene las inscripciones de un aprendiz específico (consultando por userId o apprenticeId)
+ * Obtiene las inscripciones de un aprendiz específico (consultando por userId, apprenticeId o learnerEmail)
+ * PROMPT 21: Asignación exclusiva por Instructor y Activación por Correo Gmail
  */
-export async function getEnrollmentsForApprentice(apprenticeId: string): Promise<EnrichedEnrollment[]> {
-  if (!apprenticeId) return [];
+export async function getEnrollmentsForApprentice(
+  apprenticeId: string,
+  learnerEmail?: string
+): Promise<EnrichedEnrollment[]> {
+  if (!apprenticeId && !learnerEmail) return [];
 
   try {
     let rawEnrollments: Enrollment[] = [];
 
     // 1. Intentar consultar por userId (campo canónico según el modelo)
-    try {
-      const qUser = query(
-        collection(db, 'enrollments'),
-        where('userId', '==', apprenticeId),
-        where('status', '==', 'active')
-      );
-      const snapUser = await getDocs(qUser);
-      if (!snapUser.empty) {
-        rawEnrollments = snapUser.docs.map((d) => ({ id: d.id, ...d.data() } as Enrollment));
+    if (apprenticeId) {
+      try {
+        const qUser = query(
+          collection(db, 'enrollments'),
+          where('userId', '==', apprenticeId),
+          where('status', '==', 'active')
+        );
+        const snapUser = await getDocs(qUser);
+        if (!snapUser.empty) {
+          rawEnrollments = snapUser.docs.map((d) => ({ id: d.id, ...d.data() } as Enrollment));
+        }
+      } catch (eUser) {
+        console.warn('[AcademicService] Consulta de enrollment por userId:', eUser);
       }
-    } catch (eUser) {
-      console.warn('[AcademicService] Consulta de enrollment por userId:', eUser);
     }
 
-    // 2. Si no encontró por userId, intentar consultar por apprenticeId
-    if (rawEnrollments.length === 0) {
+    // 2. Si no encontró por userId, intentar consultar por apprenticeId o learnerId
+    if (rawEnrollments.length === 0 && apprenticeId) {
       try {
         const qAppr = query(
           collection(db, 'enrollments'),
-          where('apprenticeId', '==', apprenticeId),
+          where('learnerId', '==', apprenticeId),
           where('status', '==', 'active')
         );
         const snapAppr = await getDocs(qAppr);
@@ -341,67 +347,32 @@ export async function getEnrollmentsForApprentice(apprenticeId: string): Promise
           rawEnrollments = snapAppr.docs.map((d) => ({ id: d.id, ...d.data() } as Enrollment));
         }
       } catch (eAppr) {
-        console.warn('[AcademicService] Consulta de enrollment por apprenticeId:', eAppr);
+        console.warn('[AcademicService] Consulta de enrollment por learnerId:', eAppr);
       }
     }
 
-    // 3. Si no hay matrícula registrada en la colección, comprobar si el usuario tiene perfil en /users/{uid}
-    if (rawEnrollments.length === 0) {
+    // 3. Si aún no encuentra y se proporcionó correo, consultar por learnerEmail
+    if (rawEnrollments.length === 0 && learnerEmail) {
       try {
-        const userDocRef = doc(db, 'users', apprenticeId);
-        const userSnap = await getDoc(userDocRef);
-        if (userSnap.exists()) {
-          const uData = userSnap.data();
-          const userFichaId = uData.fichaId || 'ficha_3409626';
-          const userProgramId = uData.programId || 'prog_gestion_contable';
-          const userCenterId = uData.centerId || 'center_comercio_servicios';
-          const now = new Date().toISOString();
-
-          const autoEnrollment: Enrollment = {
-            id: `enr_${apprenticeId}`,
-            userId: apprenticeId,
-            apprenticeId: apprenticeId,
-            fichaId: userFichaId,
-            programId: userProgramId,
-            centerId: userCenterId,
-            status: 'active',
-            enrollmentDate: now,
-            createdAt: now,
-            updatedAt: now,
-          };
-
-          // Guardar en Firestore para persistencia futura
-          try {
-            await setDoc(doc(db, 'enrollments', autoEnrollment.id), autoEnrollment);
-          } catch (e) {
-            console.warn('[AcademicService] Aviso creando auto-enrollment en Firestore:', e);
-          }
-
-          rawEnrollments = [autoEnrollment];
+        const normEmail = learnerEmail.trim().toLowerCase();
+        const qEmail = query(
+          collection(db, 'enrollments'),
+          where('learnerEmail', '==', normEmail)
+        );
+        const snapEmail = await getDocs(qEmail);
+        if (!snapEmail.empty) {
+          rawEnrollments = snapEmail.docs.map((d) => ({ id: d.id, ...d.data() } as Enrollment));
         }
-      } catch (errProfile) {
-        console.warn('[AcademicService] Verificación de perfil de usuario:', errProfile);
+      } catch (eEmail) {
+        console.warn('[AcademicService] Consulta de enrollment por learnerEmail:', eEmail);
       }
     }
 
-    // 4. Si aún no hay nada (ej: modo demo offline o sin conexión inicial)
+    // 3. Si no hay matrículas activas registradas para este aprendiz, retornar arreglo vacío (PROMPT 21)
+    // NINGÚN APRENDIZ TIENE ACCESO ACADÉMICO POR DEFECTO.
+    // Solo puede acceder si un instructor previamente asignó su correo a una ficha.
     if (rawEnrollments.length === 0) {
-      const demoFicha = DEMO_FICHAS[0];
-      const now = new Date().toISOString();
-      rawEnrollments = [
-        {
-          id: `demo_enr_${apprenticeId}`,
-          userId: apprenticeId,
-          apprenticeId: apprenticeId,
-          fichaId: demoFicha.id,
-          programId: demoFicha.programId,
-          centerId: demoFicha.centerId,
-          status: 'active',
-          enrollmentDate: now,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ];
+      return [];
     }
 
     const enrichedList: EnrichedEnrollment[] = await Promise.all(
@@ -489,39 +460,8 @@ export async function getEnrollmentsForApprentice(apprenticeId: string): Promise
 
     return enrichedList;
   } catch (error) {
-    console.warn('[AcademicService] Aviso en getEnrollmentsForApprentice (usando respaldo institucional):', error);
-    const demoFicha = DEMO_FICHAS[0];
-    const demoProgram = DEMO_PROGRAMS[0];
-    const demoCenter = DEMO_CENTERS[0];
-    const now = new Date().toISOString();
-    return [
-      {
-        id: `fallback_enr_${apprenticeId}`,
-        userId: apprenticeId,
-        apprenticeId,
-        fichaId: demoFicha.id,
-        programId: demoFicha.programId,
-        centerId: demoFicha.centerId,
-        status: 'active',
-        enrollmentDate: now,
-        createdAt: now,
-        updatedAt: now,
-        ficha: demoFicha,
-        program: demoProgram,
-        center: demoCenter,
-        courses: DEMO_COURSES.map((c) => ({
-          ...c,
-          fichaCourseId: `fc_${demoFicha.id}_${c.id}`,
-        })),
-        instructors: [
-          {
-            uid: 'inst_carlos_mendoza',
-            displayName: 'Carlos Mendoza (Instructor Bilingüe)',
-            email: 'cmendoza@sena.edu.co',
-          },
-        ],
-      },
-    ];
+    console.warn('[AcademicService] Error consultando matrículas para aprendiz:', error);
+    return [];
   }
 }
 

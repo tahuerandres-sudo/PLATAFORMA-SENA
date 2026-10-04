@@ -443,4 +443,34 @@ export const resourceService = {
 
     return { deleted: true, archived: false };
   },
+
+  /**
+   * Obtiene recursos según filtros (fichaId, programId, etc.)
+   */
+  async getResources(params?: {
+    fichaId?: string;
+    programId?: string;
+  }): Promise<Resource[]> {
+    try {
+      const q = query(collection(db, COLLECTION));
+      const snap = await getDocs(q);
+      let list = snap.docs.map((d) => d.data() as Resource);
+      inMemoryResources.forEach((m) => {
+        if (!list.some((item) => item.id === m.id)) {
+          list.push(m);
+        }
+      });
+      if (params?.fichaId) {
+        list = list.filter((r) => r.fichaId === params.fichaId || r.visibility === 'ALL');
+      }
+      return list.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    } catch (err) {
+      console.warn('[resourceService] Error en getResources:', err);
+      return inMemoryResources.filter((r) =>
+        params?.fichaId ? r.fichaId === params.fichaId || r.visibility === 'ALL' : true
+      );
+    }
+  },
 };

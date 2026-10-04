@@ -41,20 +41,25 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   currentRole,
   activeView,
   onNavigate,
-  unreadCount = 2,
+  unreadCount = 0,
 }) => {
-  // Accesos rápidos de la barra inferior según rol
+  // Accesos rápidos de la barra inferior según rol (PROMPT 22: Fichas como unidad principal)
   const instructorBottomShortcuts: MobileShortcut[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
-    { id: 'courses', label: 'Cursos', icon: BookOpen },
+    { id: 'fichas', label: 'Fichas', icon: Users },
     { id: 'activities', label: 'Actividades', icon: FileText },
     { id: 'submissions', label: 'Evidencias', icon: FolderArchive },
-    { id: 'notifications', label: 'Alertas', icon: Bell, badge: unreadCount },
+    {
+      id: 'notifications',
+      label: 'Alertas',
+      icon: Bell,
+      badge: unreadCount > 0 ? unreadCount : undefined,
+    },
   ];
 
   const apprenticeBottomShortcuts: MobileShortcut[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
-    { id: 'courses', label: 'Cursos', icon: BookOpen },
+    { id: 'fichas', label: 'Fichas', icon: Users },
     { id: 'activities', label: 'Actividades', icon: FileText },
     { id: 'grades', label: 'Notas', icon: Award },
     { id: 'profile', label: 'Perfil', icon: User },
@@ -101,6 +106,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                   onNavigate(viewId);
                   onClose();
                 }}
+                unreadNotificationsCount={unreadCount}
                 className="w-full border-r-0"
               />
             </div>

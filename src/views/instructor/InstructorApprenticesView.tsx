@@ -4,7 +4,7 @@
  * PROMPT 8.1: Consulta Real de Aprendices vía /enrollments + /users (Sin Datos Mock)
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Users,
   Search,
@@ -20,6 +20,7 @@ import {
   BookOpen,
   RefreshCw,
   UserX,
+  UserPlus,
 } from 'lucide-react';
 import { Ficha, ApprenticeWithEnrollment } from '../../types/academic';
 import { fichaService } from '../../services/academic/fichaService';
@@ -27,6 +28,7 @@ import { enrollmentService } from '../../services/academic/enrollmentService';
 import { useAuth } from '../../hooks/useAuth';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { ApprenticeAcademicProfileModal } from '../../components/academic/ApprenticeAcademicProfileModal';
+import { AddLearnerModal } from '../../components/academic/AddLearnerModal';
 
 interface InstructorApprenticesViewProps {
   initialFichaNumber?: string;
@@ -48,6 +50,7 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
   const [selectedApprentice, setSelectedApprentice] = useState<ApprenticeWithEnrollment | null>(
     null
   );
+  const [isAddLearnerModalOpen, setIsAddLearnerModalOpen] = useState(false);
 
   // 1. Cargar las fichas asignadas a este instructor
   useEffect(() => {
@@ -71,32 +74,32 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
   }, [instructorUid, initialFichaNumber]);
 
   // 2. Cargar aprendices reales desde /enrollments + /users
-  useEffect(() => {
-    async function loadRealApprentices() {
-      setLoading(true);
-      setIsUnauthorized(false);
-      try {
-        const res = await enrollmentService.getApprenticesWithEnrollment(
-          selectedFicha,
-          instructorUid
-        );
+  const loadRealApprentices = useCallback(async () => {
+    setLoading(true);
+    setIsUnauthorized(false);
+    try {
+      const res = await enrollmentService.getApprenticesWithEnrollment(
+        selectedFicha,
+        instructorUid
+      );
 
-        if (res.unauthorized) {
-          setIsUnauthorized(true);
-          setApprentices([]);
-        } else {
-          setApprentices(res.data || []);
-        }
-      } catch (err) {
-        console.warn('[InstructorApprenticesView] Error consultando aprendices reales:', err);
+      if (res.unauthorized) {
+        setIsUnauthorized(true);
         setApprentices([]);
-      } finally {
-        setLoading(false);
+      } else {
+        setApprentices(res.data || []);
       }
+    } catch (err) {
+      console.warn('[InstructorApprenticesView] Error consultando aprendices reales:', err);
+      setApprentices([]);
+    } finally {
+      setLoading(false);
     }
-
-    loadRealApprentices();
   }, [selectedFicha, instructorUid]);
+
+  useEffect(() => {
+    loadRealApprentices();
+  }, [loadRealApprentices]);
 
   // 3. Filtrar por búsqueda y estado
   const filteredApprentices = useMemo(() => {
@@ -135,9 +138,19 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
           </p>
         </div>
 
-        <div className="text-xs font-semibold bg-[#EBF8E7] text-[#2E8500] px-3 py-1.5 rounded-lg border border-[#39A900]/30 inline-flex items-center gap-1.5">
-          <Users className="w-3.5 h-3.5" />
-          {filteredApprentices.length} aprendices encontrados
+        <div className="flex items-center gap-2.5">
+          <div className="text-xs font-semibold bg-[#EBF8E7] text-[#2E8500] px-3 py-1.5 rounded-lg border border-[#39A900]/30 inline-flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5" />
+            {filteredApprentices.length} aprendices
+          </div>
+          <button
+            onClick={() => setIsAddLearnerModalOpen(true)}
+            className="px-3.5 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+            title="Agregar aprendiz mediante su correo Gmail"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            + Agregar aprendiz
+          </button>
         </div>
       </div>
 
@@ -276,7 +289,14 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
 
                     {/* 5. Estado */}
                     <td className="p-3 text-center">
-                      <StatusBadge status={apprentice.status} size="sm" />
+                      {apprentice.status === 'pending' || apprentice.enrollmentStatus === 'pending' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          <Clock className="w-3 h-3 text-amber-600" />
+                          Pendiente primer login
+                        </span>
+                      ) : (
+                        <StatusBadge status={apprentice.status} size="sm" />
+                      )}
                     </td>
 
                     {/* Botón Ver Expediente Digital */}
@@ -317,7 +337,14 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
                       </p>
                     </div>
                   </div>
-                  <StatusBadge status={apprentice.status} size="sm" />
+                  {apprentice.status === 'pending' || apprentice.enrollmentStatus === 'pending' ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      <Clock className="w-3 h-3 text-amber-600" />
+                      Pendiente primer login
+                    </span>
+                  ) : (
+                    <StatusBadge status={apprentice.status} size="sm" />
+                  )}
                 </div>
 
                 <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg space-y-1">
@@ -355,6 +382,19 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
       <ApprenticeAcademicProfileModal
         apprentice={selectedApprentice}
         onClose={() => setSelectedApprentice(null)}
+      />
+
+      {/* Modal Agregar Aprendiz (PROMPT 21) */}
+      <AddLearnerModal
+        isOpen={isAddLearnerModalOpen}
+        onClose={() => setIsAddLearnerModalOpen(false)}
+        fichas={fichas}
+        preselectedFichaId={selectedFicha !== 'all' ? selectedFicha : undefined}
+        instructorUid={instructorUid || ''}
+        instructorName={userProfile?.displayName}
+        onLearnerAdded={() => {
+          loadRealApprentices();
+        }}
       />
     </div>
   );
