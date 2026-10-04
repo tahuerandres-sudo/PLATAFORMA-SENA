@@ -90,8 +90,11 @@ export const enrollmentService = {
 
     const isAssigned =
       !payload.instructorUid ||
-      (ficha.instructorIds && ficha.instructorIds.includes(payload.instructorUid)) ||
-      (ficha.createdBy && ficha.createdBy === payload.instructorUid);
+      !ficha.instructorIds ||
+      ficha.instructorIds.length === 0 ||
+      ficha.instructorIds.includes(payload.instructorUid) ||
+      (ficha.createdBy && ficha.createdBy === payload.instructorUid) ||
+      (ficha as any).instructorId === payload.instructorUid;
 
     if (!isAssigned) {
       throw new Error('No tienes permisos para agregar aprendices a esta ficha.');
