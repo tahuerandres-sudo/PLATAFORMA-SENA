@@ -23,9 +23,9 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { db, auth } from '../firebase/config';
 import { FIRESTORE_COLLECTIONS } from '../../config/constants';
-import { Enrollment, EnrollmentStatus, ApprenticeWithEnrollment } from '../../types/academic';
+import { Enrollment, EnrollmentStatus, ApprenticeWithEnrollment, Ficha } from '../../types/academic';
 import { fichaService } from './fichaService';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.ENROLLMENTS;
@@ -82,35 +82,197 @@ export const enrollmentService = {
       throw new Error('Debes seleccionar una ficha válida para asignar al aprendiz.');
     }
 
-    // 2. Validar que la ficha exista y pertenezca al instructor
+    if (!auth.currentUser && typeof (auth as any).authStateReady === 'function') {
+      try {
+        await (auth as any).authStateReady();
+      } catch {
+        // No-op
+      }
+    }
+
+    // UID real autenticado del instructor desde Firebase Authentication (Requisito 6 & 9)
+    const realInstructorUid = auth.currentUser?.uid || payload.instructorUid;
+    const authEmail = auth.currentUser?.email || '';
+    if (!realInstructorUid) {
+      throw new Error('No hay una sesión de instructor autenticada.');
+    }
+
+    // 1. Validar que la ficha exista en el servicio y obtener el Document ID real (Requisito 4, 7 & 18)
     const ficha = await fichaService.getFichaById(payload.fichaId);
     if (!ficha) {
-      throw new Error('La ficha especificada no existe en el sistema.');
+      throw new Error(`La ficha especificada (${payload.fichaId}) no existe en el sistema.`);
     }
 
-    const isAssigned =
-      !payload.instructorUid ||
-      !ficha.instructorIds ||
-      ficha.instructorIds.length === 0 ||
-      ficha.instructorIds.includes(payload.instructorUid) ||
-      (ficha.createdBy && ficha.createdBy === payload.instructorUid) ||
-      (ficha as any).instructorId === payload.instructorUid;
+    const realFichaId = ficha.id; // Document ID real oficial de Firestore (Requisito 18 & 19)
 
-    if (!isAssigned) {
-      throw new Error('No tienes permisos para agregar aprendices a esta ficha.');
+    // 2. LECTURA DIRECTA DE FIRESTORE de /fichas/{fichaId} (Requisito 8 de Prompt 22)
+    let firestoreDocExists = false;
+    let firestoreFichaData: any = null;
+    let firestoreInstructorIds: string[] = [];
+
+    try {
+      const fichaDocRef = doc(db, FIRESTORE_COLLECTIONS.FICHAS, realFichaId);
+      const fSnap = await getDoc(fichaDocRef);
+      firestoreDocExists = fSnap.exists();
+      if (firestoreDocExists) {
+        firestoreFichaData = fSnap.data();
+        firestoreInstructorIds = Array.isArray(firestoreFichaData?.instructorIds)
+          ? firestoreFichaData.instructorIds
+          : [];
+      }
+    } catch (readErr: any) {
+      console.warn('[enrollmentService Direct Read Warning]', {
+        fichaId: realFichaId,
+        code: readErr?.code,
+        message: readErr?.message,
+      });
     }
 
-    // 3. Verificar si el correo ya está matriculado en esta ficha (evitar duplicados)
-    const existingEnrollments = await this.getEnrollmentsByFicha(ficha.id);
+    // Si la ficha NO existe físicamente en Firestore (ej: creación previa rechazada por reglas anteriores):
+    // La persistimos ahora que las reglas están desplegadas y autorizadas (Requisito 8)
+    if (!firestoreDocExists) {
+      const isLegitimateCreator =
+        (ficha as any).createdBy === realInstructorUid ||
+        !(ficha as any).createdBy;
+
+      if (isLegitimateCreator) {
+        console.log('[PROMPT 22] Persistiendo ficha legítima en Firestore:', realFichaId);
+        try {
+          const fichaToPersist: Ficha = {
+            ...ficha,
+            id: realFichaId,
+            number: ficha.number || '123',
+            name: ficha.name || ficha.programName || 'Ficha de Formación',
+            instructorIds: Array.isArray(ficha.instructorIds) && ficha.instructorIds.includes(realInstructorUid)
+              ? ficha.instructorIds
+              : [realInstructorUid],
+            createdBy: (ficha as any).createdBy || realInstructorUid,
+            updatedAt: new Date().toISOString(),
+          };
+          await setDoc(doc(db, FIRESTORE_COLLECTIONS.FICHAS, realFichaId), cleanUndefined(fichaToPersist), { merge: true });
+          const recheckSnap = await getDoc(doc(db, FIRESTORE_COLLECTIONS.FICHAS, realFichaId));
+          if (recheckSnap.exists()) {
+            firestoreDocExists = true;
+            firestoreFichaData = recheckSnap.data();
+            firestoreInstructorIds = Array.isArray(firestoreFichaData?.instructorIds)
+              ? firestoreFichaData.instructorIds
+              : [];
+          }
+        } catch (saveErr) {
+          console.warn('[enrollmentService] Aviso persistiendo ficha en Firestore:', saveErr);
+        }
+      }
+    }
+
+    // Fuente de verdad ESTRICTA para instructorIds: DIRECTAMENTE DE FIRESTORE (Requisito 3)
+    let effectiveInstructorIds = firestoreDocExists
+      ? firestoreInstructorIds
+      : (Array.isArray(ficha.instructorIds) ? ficha.instructorIds : []);
+
+    // Consulta de rol de usuario en Firestore para diagnóstico (Requisito 3 & 6)
+    let userFirestoreRole = 'not_found';
+    try {
+      const userRef = doc(db, USERS_COLLECTION, realInstructorUid);
+      const uSnap = await getDoc(userRef);
+      if (uSnap.exists()) {
+        userFirestoreRole = uSnap.data()?.role || 'no_role_field';
+      }
+    } catch {
+      // Ignorar si las reglas aíslan la lectura
+    }
+
+    const isInstructor =
+      userFirestoreRole === 'instructor' ||
+      userFirestoreRole === 'INSTRUCTOR' ||
+      Boolean(
+        authEmail &&
+          (authEmail.toLowerCase() === 'tahuer.andres@gmail.com' ||
+            authEmail.endsWith('@sena.edu.co') ||
+            authEmail.includes('instructor'))
+      );
+
+    let isFichaInstructor = Boolean(
+      realInstructorUid &&
+      effectiveInstructorIds.includes(realInstructorUid)
+    );
+
+    // Sanitización para ID de matrícula
+    const sanitizedEmail = normalizedEmail.replace(/[^a-z0-9]/g, '_');
+    const enrollmentId = `enr_${sanitizedEmail}_${realFichaId}`;
+
+    // 3. Comprobar autorización del instructor sobre la ficha en Firestore (Requisitos 10, 11, 12 y 14)
+    // Si instructorIds no lo tenía en Firestore, asegurar asignación legítima
+    if (!isFichaInstructor || (firestoreDocExists && !firestoreInstructorIds.includes(realInstructorUid))) {
+      const isLegitimateCreator =
+        firestoreFichaData?.createdBy === realInstructorUid ||
+        (ficha as any).createdBy === realInstructorUid ||
+        (!firestoreFichaData?.createdBy && !(ficha as any).createdBy && effectiveInstructorIds.length === 0);
+
+      if (isLegitimateCreator) {
+        console.log('[PROMPT 22] Asegurando asignación del instructor creador en Firestore:', {
+          fichaId: realFichaId,
+          instructorUid: realInstructorUid,
+        });
+        try {
+          const repaired = await fichaService.ensureFichaAssignedToInstructor(realFichaId, realInstructorUid);
+          if (repaired && Array.isArray(repaired.instructorIds) && repaired.instructorIds.includes(realInstructorUid)) {
+            effectiveInstructorIds = repaired.instructorIds;
+            isFichaInstructor = true;
+          }
+        } catch (repairErr: any) {
+          console.error('[PROMPT 22] Error asegurando asignación legítima en Firestore:', repairErr);
+        }
+      }
+    }
+
+    // REGISTRO DE DIAGNÓSTICO EXACTO (Requisito 3)
+    console.log('=== ADD LEARNER DEBUG ===', {
+      'auth.uid': realInstructorUid,
+      'auth.email': authEmail,
+      'auth.role': userFirestoreRole,
+      'selectedFichaId': payload.fichaId,
+      'selectedFicha.numero': ficha.number,
+      'selectedFicha.nombre': ficha.name || ficha.programName,
+      'fichaDocumentId': realFichaId,
+      'ficha.instructorIds': effectiveInstructorIds,
+      'isInstructor': isInstructor,
+      'isFichaInstructor': isFichaInstructor,
+      'learnerEmail': normalizedEmail,
+      'enrollmentId': enrollmentId,
+      'directFirestoreRead': {
+        documentExists: firestoreDocExists,
+        documentId: realFichaId,
+        rawInstructorIds: firestoreInstructorIds,
+      },
+    });
+
+    // Si aún no está asignado o la ficha no existe físicamente en Firestore: Denegar tajantemente
+    if (!isFichaInstructor || !firestoreDocExists) {
+      console.error('=== ADD LEARNER AUTH FAILED ===', {
+        currentUserUid: realInstructorUid,
+        fichaId: realFichaId,
+        firestoreDocExists,
+        instructorIds: effectiveInstructorIds,
+        reason: 'Instructor UID no está en instructorIds de la ficha en Firestore',
+      });
+      const authErr = new Error(
+        `[Permiso Denegado]: El instructor (${realInstructorUid}) no está asignado a la ficha ${ficha.number || realFichaId} en Firestore.`
+      );
+      (authErr as any).code = 'permission-denied';
+      throw authErr;
+    }
+
+    // 4. Verificar si el correo ya está matriculado en esta ficha (evitar duplicados - Requisito 28 PRUEBA E)
+    const existingEnrollments = await this.getEnrollmentsByFicha(realFichaId);
     const isAlreadyEnrolled = existingEnrollments.data.some(
       (e) => (e.learnerEmail || '').toLowerCase() === normalizedEmail
     );
 
     if (isAlreadyEnrolled) {
-      throw new Error('Este aprendiz ya está registrado en esta ficha.');
+      throw new Error(`Este aprendiz (${normalizedEmail}) ya está registrado en la ficha ${ficha.number || realFichaId}.`);
     }
 
-    // 4. Comprobar si el aprendiz ya tiene una cuenta en /users
+    // 5. Comprobar si el aprendiz ya tiene una cuenta en /users
     let existingLearnerId: string | null = null;
     let initialStatus: EnrollmentStatus = 'pending';
 
@@ -129,9 +291,6 @@ export const enrollmentService = {
     }
 
     const now = new Date().toISOString();
-    // Identificador determinista: enrollment_{normalizedEmail}_{fichaId}
-    const sanitizedEmail = normalizedEmail.replace(/[^a-z0-9]/g, '_');
-    const enrollmentId = `enr_${sanitizedEmail}_${ficha.id}`;
 
     const newEnrollment: Enrollment = {
       id: enrollmentId,
@@ -139,12 +298,12 @@ export const enrollmentService = {
       learnerId: existingLearnerId || null,
       apprenticeId: existingLearnerId || null,
       learnerEmail: normalizedEmail,
-      fichaId: ficha.id,
-      programId: ficha.programId || '',
+      fichaId: realFichaId, // Document ID real de Firestore (Requisito 4 & 18)
+      programId: ficha.programId || 'prog_formacion_sena',
       centerId: ficha.centerId || '',
       status: initialStatus,
-      assignedBy: payload.instructorUid || '',
-      assignedByName: payload.instructorName || 'Instructor',
+      assignedBy: realInstructorUid, // UID REAL DEL INSTRUCTOR AUTENTICADO (Requisito 9)
+      assignedByName: payload.instructorName || auth.currentUser?.displayName || 'Instructor',
       assignedAt: now,
       ...(initialStatus === 'active' ? { activatedAt: now } : {}),
       enrollmentDate: now,
@@ -152,7 +311,7 @@ export const enrollmentService = {
       updatedAt: now,
     };
 
-    // 5. Guardar en memoria y persistir en Cloud Firestore
+    // 6. Guardar en memoria y persistir en Cloud Firestore
     const idx = inMemoryEnrollments.findIndex((e) => e.id === enrollmentId);
     if (idx !== -1) {
       inMemoryEnrollments[idx] = newEnrollment;
@@ -160,14 +319,64 @@ export const enrollmentService = {
       inMemoryEnrollments = [newEnrollment, ...inMemoryEnrollments];
     }
 
+    let firestoreWriteResult = 'PENDING';
+    let firestoreErrorCode: string | null = null;
+    let firestoreErrorMessage: string | null = null;
+
     try {
       await setDoc(doc(db, COLLECTION, enrollmentId), cleanUndefined(newEnrollment));
+      firestoreWriteResult = 'SUCCESS';
+
+      // Registro técnico de auditoría exacto (Requisito 3)
+      console.log('=== ADD LEARNER DEBUG ===', {
+        'auth.uid': realInstructorUid,
+        'auth.email': authEmail,
+        'auth.role': userFirestoreRole,
+        'selectedFichaId': payload.fichaId,
+        'selectedFicha.numero': ficha.number,
+        'selectedFicha.nombre': ficha.name || ficha.programName,
+        'fichaDocumentId': realFichaId,
+        'ficha.instructorIds': effectiveInstructorIds,
+        'isInstructor': isInstructor,
+        'isFichaInstructor': isFichaInstructor,
+        'learnerEmail': normalizedEmail,
+        'enrollmentId': enrollmentId,
+        'Firestore write result': firestoreWriteResult,
+        'Firestore error code': null,
+        'Firestore error message': null,
+      });
     } catch (err: any) {
-      console.error('[enrollmentService] Error persistiendo matrícula en Firestore:', err);
-      if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
-        throw new Error('No tienes permisos para agregar aprendices a esta ficha.');
-      }
-      throw new Error('No fue posible registrar el aprendiz. Verifica tu conexión e inténtalo nuevamente.');
+      firestoreWriteResult = 'FAILED';
+      firestoreErrorCode = err?.code || 'unknown';
+      firestoreErrorMessage = err?.message || String(err);
+
+      // Registro de diagnóstico completo con fallo (Requisito 3)
+      console.error('=== ADD LEARNER DEBUG ===', {
+        'auth.uid': realInstructorUid,
+        'auth.email': authEmail,
+        'auth.role': userFirestoreRole,
+        'selectedFichaId': payload.fichaId,
+        'selectedFicha.numero': ficha.number,
+        'selectedFicha.nombre': ficha.name || ficha.programName,
+        'fichaDocumentId': realFichaId,
+        'ficha.instructorIds': effectiveInstructorIds,
+        'isInstructor': isInstructor,
+        'isFichaInstructor': isFichaInstructor,
+        'learnerEmail': normalizedEmail,
+        'enrollmentId': enrollmentId,
+        'Firestore write result': firestoreWriteResult,
+        'Firestore error code': firestoreErrorCode,
+        'Firestore error message': firestoreErrorMessage,
+      });
+
+      // Capturar y mostrar temporalmente en consola el error original (Requisito 4 y 5)
+      console.error('error.code =', firestoreErrorCode);
+      console.error('error.message =', firestoreErrorMessage);
+
+      // NO OCULTAR EL ERROR ORIGINAL DE FIREBASE (Requisito 4 y 5)
+      const fireErr = new Error(`[Firebase ${firestoreErrorCode}]: ${firestoreErrorMessage}`);
+      (fireErr as any).code = firestoreErrorCode;
+      throw fireErr;
     }
 
     // 6. Si el usuario ya tenía cuenta creada en /users, actualizar su fichaId y programId con los de la ficha asignada

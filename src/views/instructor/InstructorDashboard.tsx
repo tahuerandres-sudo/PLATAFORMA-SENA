@@ -133,7 +133,7 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({
   const myFichas = useMemo(() => {
     return fichas.filter((f) => {
       if (!f.instructorIds || f.instructorIds.length === 0) return true;
-      return f.instructorIds.includes(instructorUid);
+      return f.instructorIds.includes(instructorUid) || f.createdBy === instructorUid;
     });
   }, [fichas, instructorUid]);
 

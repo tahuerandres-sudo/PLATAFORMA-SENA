@@ -62,7 +62,7 @@ export interface Ficha {
   description?: string;
   programName?: string;
   centerName?: string;
-  programId: string;
+  programId?: string;
   centerId: string;
   instructorIds: string[]; // Uno o varios instructores asignados
   startDate: string; // ISO-8601

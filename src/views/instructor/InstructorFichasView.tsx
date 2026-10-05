@@ -69,6 +69,7 @@ import { ApprenticeAcademicProfileModal } from '../../components/academic/Appren
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useAuth } from '../../hooks/useAuth';
+import { auth } from '../../services/firebase/config';
 
 interface InstructorFichasViewProps {
   onSelectFicha?: (fichaId: string) => void;
@@ -84,7 +85,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   initialFichaId,
 }) => {
   const { currentUser, userProfile } = useAuth();
-  const instructorUid = currentUser?.uid || userProfile?.uid || '';
+  const instructorUid = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid || '';
 
   // 1. Estado Principal de Fichas
   const [fichas, setFichas] = useState<Ficha[]>([]);
@@ -134,7 +135,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   // 7. Formulario Crear Ficha (Campos estrictos Sección 6)
   const [newFichaName, setNewFichaName] = useState('');
   const [newFichaNumber, setNewFichaNumber] = useState('');
-  const [newProgramName, setNewProgramName] = useState('');
   const [newCenterId, setNewCenterId] = useState('');
   const [newShift, setNewShift] = useState<FichaShift>('morning');
   const [newStartDate, setNewStartDate] = useState('');
@@ -291,14 +291,13 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
     const rawNumber = newFichaNumber.trim();
     const rawName = newFichaName.trim();
-    const rawProgram = newProgramName.trim();
 
-    if (!rawNumber) {
-      setFichaFormError('El número de ficha es obligatorio.');
+    if (!rawName) {
+      setFichaFormError('El nombre descriptivo de la ficha / clase es obligatorio.');
       return;
     }
-    if (!rawProgram) {
-      setFichaFormError('El programa de formación es obligatorio.');
+    if (!rawNumber) {
+      setFichaFormError('El número de ficha es obligatorio.');
       return;
     }
 
@@ -308,37 +307,26 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       const now = new Date().toISOString();
       const fichaId = `ficha_${rawNumber}`;
 
-      // Encontrar o crear ID de programa
-      const existingProg = programs.find(
-        (p) => p.name.toLowerCase().trim() === rawProgram.toLowerCase()
-      );
-      let programId = existingProg ? existingProg.id : `prog_${Date.now().toString(36)}`;
+      // Asignar ID de programa por compatibilidad interna sin requerir input del instructor
+      const defaultProg = programs[0] || null;
+      const programId = defaultProg?.id || 'prog_gestion_academica';
 
-      if (!existingProg) {
-        const newProgObj: TrainingProgram = {
-          id: programId,
-          name: rawProgram,
-          code: `${Math.floor(100000 + Math.random() * 900000)}`,
-          level: 'tecnologo',
-          centerId: newCenterId || centers[0]?.id || 'center_comercio_servicios',
-          status: 'active',
-          description: `Programa de formación: ${rawProgram}`,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await programService.saveProgram(newProgObj);
-        setPrograms((prev) => [newProgObj, ...prev]);
+      const realInstructorUid = auth.currentUser?.uid || instructorUid;
+      if (!realInstructorUid) {
+        setFichaFormError('No se detectó una sesión de instructor activa. Por favor recarga e inicia sesión.');
+        return;
       }
 
       const newFicha: Ficha = {
         id: fichaId,
         number: rawNumber,
-        name: rawName || rawProgram,
-        description: newDescription.trim() || `Ficha ${rawNumber} - ${rawProgram}`,
+        name: rawName,
+        description: newDescription.trim() || `Ficha ${rawNumber} - ${rawName}`,
         programId,
-        programName: rawProgram,
+        programName: rawName,
         centerId: newCenterId || centers[0]?.id || 'center_comercio_servicios',
-        instructorIds: instructorUid ? [instructorUid] : [],
+        instructorIds: [realInstructorUid],
+        createdBy: realInstructorUid,
         startDate: newStartDate ? `${newStartDate}T00:00:00Z` : now,
         endDate: newEndDate ? `${newEndDate}T00:00:00Z` : '2028-12-31T00:00:00Z',
         status: 'active',
@@ -349,15 +337,14 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       };
 
       const saved = await fichaService.saveFicha(newFicha);
-      setFichas((prev) => [saved, ...prev]);
+      setFichas((prev) => [saved, ...prev.filter((f) => f.id !== saved.id)]);
       setActiveFichaId(saved.id);
-      setViewMode('detail');
+      setViewMode('grid');
       setIsCreateFichaModalOpen(false);
 
       // Limpiar formulario
       setNewFichaName('');
       setNewFichaNumber('');
-      setNewProgramName('');
       setNewDescription('');
       setNewStartDate('');
       setNewEndDate('');
@@ -365,6 +352,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
       }
+
+      // Sincronizar catálogo con Firestore de forma reactiva
+      await loadFichasAndCatalogs();
     } catch (err: any) {
       console.warn('[InstructorFichasView] Error guardando ficha:', err);
       setFichaFormError(err.message || 'No fue posible guardar la ficha.');
@@ -411,7 +401,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         targetType: 'FICHA',
         targetIds: [activeFicha.id],
         fichaIds: [activeFicha.id],
-        programIds: [activeFicha.programId],
+        programIds: activeFicha.programId ? [activeFicha.programId] : [],
         createdBy: instructorUid,
         creatorName: userProfile?.displayName || 'Instructor SENA',
         creatorEmail: userProfile?.email || 'instructor@sena.edu.co',
@@ -1167,8 +1157,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             onClick={() => {
               setNewFichaName('');
               setNewFichaNumber('');
-              setNewProgramName(programs[0]?.name || '');
               setNewDescription('');
+              setNewStartDate('');
+              setNewEndDate('');
               setFichaFormError(null);
               setIsCreateFichaModalOpen(true);
             }}
@@ -1388,20 +1379,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 <option value="evening">Nocturna</option>
               </select>
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Programa de Formación *
-            </label>
-            <input
-              type="text"
-              required
-              value={newProgramName}
-              onChange={(e) => setNewProgramName(e.target.value)}
-              placeholder="Ej: Gestión Contable y de Información Financiera..."
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
-            />
           </div>
 
           <div>

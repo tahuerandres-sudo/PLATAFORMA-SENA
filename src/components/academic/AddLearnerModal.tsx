@@ -18,7 +18,20 @@ import {
   Check,
 } from 'lucide-react';
 import { enrollmentService } from '../../services/academic/enrollmentService';
+import { fichaService } from '../../services/academic/fichaService';
 import { Ficha } from '../../types/academic';
+import { auth, db } from '../../services/firebase/config';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+
+function cleanUndefined<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
+}
 
 /**
  * Expresión regular para validación estándar de correo electrónico:
@@ -122,10 +135,162 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
     availableFichas[0] ||
     null;
 
+  // UID real del instructor autenticado en Firebase (Requisito 6)
+  const realInstructorUid = auth.currentUser?.uid || instructorUid;
+  const authEmail = auth.currentUser?.email || '';
+
+  // Estado sincronizado de Firestore para auditoría real
+  const [firestoreAuditState, setFirestoreAuditState] = useState<{
+    loaded: boolean;
+    docExists: boolean;
+    docId: string;
+    instructorIds: string[];
+    userRole: string;
+    createdBy?: string;
+  }>({
+    loaded: false,
+    docExists: false,
+    docId: '',
+    instructorIds: [],
+    userRole: 'loading',
+  });
+
+  // Lectura directa de Firestore al abrir el modal o cambiar de ficha (Requisitos 6, 7, 8 y 9)
+  useEffect(() => {
+    if (!isOpen || !activeFicha || !realInstructorUid) return;
+
+    let isMounted = true;
+    const runAuditRead = async () => {
+      let role = 'not_found';
+      try {
+        const uSnap = await getDoc(doc(db, 'users', realInstructorUid));
+        if (uSnap.exists()) {
+          role = uSnap.data()?.role || 'no_role_field';
+        }
+      } catch (err: any) {
+        console.warn('[AddLearnerModal] Error leyendo rol de /users:', err?.message);
+      }
+
+      // ID oficial único de Firestore (Requisitos 6, 7 y 8 de Prompt 22)
+      const officialDocId = activeFicha.id;
+      let docExists = false;
+      let docId = officialDocId;
+      let rawData: any = null;
+      let instIds: string[] = [];
+
+      try {
+        let fSnap = await getDoc(doc(db, 'fichas', officialDocId));
+        if (fSnap.exists()) {
+          docExists = true;
+          docId = fSnap.id;
+          rawData = fSnap.data();
+          instIds = Array.isArray(rawData?.instructorIds) ? rawData.instructorIds : [];
+        } else {
+          // Si la ficha no existe físicamente en Firestore (ej: fallo por reglas antes del despliegue)
+          const isLegitimateCreator =
+            (activeFicha as any)?.createdBy === realInstructorUid ||
+            !(activeFicha as any)?.createdBy;
+
+          if (isLegitimateCreator) {
+            console.log('[PROMPT 22] Persistiendo ficha legítima en Firestore:', officialDocId);
+            const fichaToPersist: Ficha = {
+              ...activeFicha,
+              id: officialDocId,
+              number: activeFicha.number || '123',
+              name: activeFicha.name || activeFicha.programName || 'Ficha de Formación',
+              instructorIds: Array.isArray(activeFicha.instructorIds) && activeFicha.instructorIds.includes(realInstructorUid)
+                ? activeFicha.instructorIds
+                : [realInstructorUid],
+              createdBy: (activeFicha as any)?.createdBy || realInstructorUid,
+              updatedAt: new Date().toISOString(),
+            };
+            await setDoc(doc(db, 'fichas', officialDocId), cleanUndefined(fichaToPersist), { merge: true });
+            const recheckSnap = await getDoc(doc(db, 'fichas', officialDocId));
+            if (recheckSnap.exists()) {
+              docExists = true;
+              docId = recheckSnap.id;
+              rawData = recheckSnap.data();
+              instIds = Array.isArray(rawData?.instructorIds) ? rawData.instructorIds : [];
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[AddLearnerModal] Error lectura directa /fichas:', err?.message);
+      }
+
+      if (isMounted) {
+        setFirestoreAuditState({
+          loaded: true,
+          docExists,
+          docId,
+          instructorIds: instIds,
+          userRole: role,
+          createdBy: rawData?.createdBy,
+        });
+
+        // COMPARACIÓN EXPLÍCITA FRONTEND VS FIRESTORE (Requisito 9)
+        console.log('=== FRONTEND VS FIRESTORE AUDIT ===', {
+          FRONTEND: {
+            selectedFichaId: activeFicha.id,
+            instructorIds: activeFicha.instructorIds || [],
+          },
+          'BACKEND/FIRESTORE': {
+            documentExists: docExists,
+            documentId: docId,
+            instructorIds: instIds,
+            createdBy: rawData?.createdBy,
+          },
+          AUTH: {
+            'currentUser.uid': realInstructorUid,
+            'currentUser.email': authEmail,
+            'userRole': role,
+          },
+        });
+
+        // LECTURA DIRECTA DE FIRESTORE (Requisito 8)
+        console.log('=== FIRESTORE DIRECT READ ===', {
+          'document exists': docExists,
+          'document.id': docId,
+          'document.data()': rawData,
+          'instructorIds': instIds,
+        });
+      }
+    };
+
+    runAuditRead();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, activeFicha?.id, realInstructorUid, authEmail]);
+
+  // Determinar si la ficha está verdaderamente asignada al instructor autenticado (Requisito 10)
+  // Condición estricta requerida por Requisito 10: Array.isArray(ficha.instructorIds) && ficha.instructorIds.includes(currentUser.uid)
+  const effectiveFichaInstructorIds = firestoreAuditState.loaded && firestoreAuditState.docExists
+    ? firestoreAuditState.instructorIds
+    : (Array.isArray(activeFicha?.instructorIds) ? activeFicha.instructorIds : []);
+
+  const isFichaAssignedToInstructor = Boolean(
+    realInstructorUid &&
+    effectiveFichaInstructorIds.includes(realInstructorUid)
+  );
+
+  // Registro técnico de auditoría no sensible continuo
+  useEffect(() => {
+    if (isOpen && activeFicha && realInstructorUid) {
+      console.log('[AUDIT] currentUser.uid =', realInstructorUid);
+      console.log('[AUDIT] fichaId seleccionada =', activeFicha.id);
+      console.log('[AUDIT] role =', firestoreAuditState.userRole);
+      console.log('[AUDIT] ficha.instructorIds =', JSON.stringify(effectiveFichaInstructorIds));
+      console.log('[AUDIT] isInstructor =', firestoreAuditState.userRole.toLowerCase().includes('instructor') || authEmail.toLowerCase().includes('instructor') || authEmail.toLowerCase().endsWith('@sena.edu.co') || authEmail.toLowerCase() === 'tahuer.andres@gmail.com');
+      console.log('[AUDIT] isFichaInstructor =', isFichaAssignedToInstructor);
+    }
+  }, [isOpen, activeFicha, realInstructorUid, firestoreAuditState.userRole, effectiveFichaInstructorIds, isFichaAssignedToInstructor, authEmail]);
+
   // Normalización y validación en tiempo real del correo electrónico
   const normalizedEmail = email.trim().toLowerCase();
   const isValidEmail = Boolean(normalizedEmail && EMAIL_REGEX.test(normalizedEmail));
-  const canSubmit = Boolean(!loading && activeFicha && isValidEmail);
+  const canSubmit = Boolean(!loading && activeFicha && (isFichaAssignedToInstructor || (firestoreAuditState.docExists && firestoreAuditState.createdBy === realInstructorUid)) && isValidEmail);
 
   if (!isOpen) return null;
 
@@ -144,13 +309,65 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
       return;
     }
 
+    // Comprobación de asignación segura (Requisitos 10, 11, 12 y 14)
+    let currentAssigned = isFichaAssignedToInstructor;
+
+    // Si instructorIds no lo tenía, pero el instructor es el creador legítimo de la ficha (Requisito 14)
+    if (!currentAssigned && realInstructorUid) {
+      const isLegitimateCreator =
+        firestoreAuditState.createdBy === realInstructorUid ||
+        (activeFicha as any)?.createdBy === realInstructorUid;
+
+      if (isLegitimateCreator) {
+        console.log('[AUDIT] Reparando asignación legítima de ficha propia antes de enrolar...');
+        try {
+          const repaired = await fichaService.ensureFichaAssignedToInstructor(
+            firestoreAuditState.docId || activeFicha.id,
+            realInstructorUid
+          );
+          if (repaired && Array.isArray(repaired.instructorIds) && repaired.instructorIds.includes(realInstructorUid)) {
+            currentAssigned = true;
+            activeFicha.instructorIds = repaired.instructorIds;
+            setFirestoreAuditState((prev) => ({
+              ...prev,
+              instructorIds: repaired.instructorIds,
+            }));
+          }
+        } catch (repairErr: any) {
+          console.error('[AUDIT] Error al asegurar asignación legítima en Firestore:', repairErr);
+        }
+      }
+    }
+
+    if (!currentAssigned) {
+      console.error('=== ADD LEARNER PERMISSION DENIED (FRONTEND CHECK) ===', {
+        currentUserUid: realInstructorUid,
+        selectedFichaId: activeFicha.id,
+        instructorIds: effectiveFichaInstructorIds,
+        fichaCreatedBy: firestoreAuditState.createdBy || (activeFicha as any)?.createdBy,
+      });
+      setErrorMessage(`No tienes permisos para agregar aprendices a esta ficha. Tu UID (${realInstructorUid}) no está asignado a los instructores de la ficha (${JSON.stringify(effectiveFichaInstructorIds)}).`);
+      return;
+    }
+
     setLoading(true);
 
     try {
+      const targetFichaDocId = firestoreAuditState.docId || activeFicha.id;
+
+      // COMPROBAR EL DOCUMENT ID REAL (Requisito 7 de Prompt 22)
+      console.log('=== REAL DOCUMENT ID CHECK ===', {
+        'selectedFicha.id': activeFicha.id,
+        'selectedFicha.numero': activeFicha.number,
+        'selectedFicha.nombre': activeFicha.name || activeFicha.programName,
+        'targetFichaDocId (Firestore Document ID Oficial)': targetFichaDocId,
+        'isNotJustNumber': targetFichaDocId !== activeFicha.number,
+      });
+
       const result = await enrollmentService.addLearnerByEmail({
-        fichaId: activeFicha.id,
+        fichaId: targetFichaDocId,
         email: normalizedEmail,
-        instructorUid,
+        instructorUid: realInstructorUid,
         instructorName,
       });
 
@@ -169,7 +386,7 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
           email: normalizedEmail,
           status: result.status,
           message: result.message,
-          fichaId: activeFicha.id,
+          fichaId: targetFichaDocId,
           fichaNumber: result.fichaNumber || activeFicha.number,
         });
       }
@@ -179,11 +396,25 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
         handleClose();
       }, 2500);
     } catch (err: any) {
-      console.warn('[AddLearnerModal] Error agregando aprendiz:', err);
-      setErrorMessage(
-        err.message ||
-          'No fue posible registrar el aprendiz. Verifica tu conexión e inténtalo nuevamente.'
-      );
+      // CAPTURAR EL ERROR REAL DE FIREBASE ANTES DE CUALQUIER TRANSFORMACIÓN (Requisitos 4 y 5)
+      const rawCode = err?.code || (err?.message?.includes('[Firebase ') ? err.message.split(']:')[0].replace('[Firebase ', '') : 'unknown');
+      const rawMessage = err?.message || String(err);
+
+      console.error('=== ADD LEARNER REAL ERROR CAPTURED ===', {
+        'error.code': rawCode,
+        'error.message': rawMessage,
+        fullError: err,
+      });
+
+      console.error('error.code =', rawCode);
+      console.error('error.message =', rawMessage);
+
+      // Mostrar directamente el error técnico con su código para diagnóstico transparente
+      const displayMsg = rawCode && rawCode !== 'unknown'
+        ? `[Error ${rawCode}]: ${rawMessage}`
+        : rawMessage;
+
+      setErrorMessage(displayMsg);
     } finally {
       setLoading(false);
     }
@@ -295,9 +526,15 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold bg-[#EBF8E7] text-[#2E8500] px-2 py-0.5 rounded border border-[#39A900]/30 shrink-0">
-                      Asignada
-                    </span>
+                    {isFichaAssignedToInstructor ? (
+                      <span className="text-[10px] font-bold bg-[#EBF8E7] text-[#2E8500] px-2 py-0.5 rounded border border-[#39A900]/30 shrink-0">
+                        Asignada
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-300 shrink-0">
+                        No asignada
+                      </span>
+                    )}
                   </div>
                 ) : (
                   /* Modo Selector: cuando se abre desde la vista general de aprendices */

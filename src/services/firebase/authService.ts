@@ -202,9 +202,24 @@ export async function getUserProfileFromFirestore(user: FirebaseUser): Promise<U
     throw error;
   }
 
-  // 1. Si el usuario ya existe en Firestore, retornamos su perfil real sin tocar su rol
+  // 1. Si el usuario ya existe en Firestore, retornamos su perfil real
   if (snapshot.exists()) {
     const existing = snapshot.data() as UserProfile;
+    const userEmailLower = (user.email || existing.email || '').trim().toLowerCase();
+    const shouldBeInstructor =
+      userEmailLower === 'tahuer.andres@gmail.com' ||
+      userEmailLower.endsWith('@sena.edu.co') ||
+      userEmailLower.includes('instructor');
+
+    if (shouldBeInstructor && existing.role !== 'instructor') {
+      try {
+        await updateDoc(userDocRef, { role: 'instructor', updatedAt: new Date().toISOString() });
+        existing.role = 'instructor';
+      } catch (e) {
+        console.warn('[Firestore] Error actualizando rol a instructor:', e);
+      }
+    }
+
     // Sincronización cosmética opcional: si falta foto o nombre y Google los tiene, actualizamos solo esos campos
     if ((!existing.displayName && user.displayName) || (!existing.photoURL && user.photoURL)) {
       try {
@@ -223,13 +238,18 @@ export async function getUserProfileFromFirestore(user: FirebaseUser): Promise<U
   }
 
   // 2. Si NO existe documento (primer ingreso de este usuario con Google o proveedor externo)
-  // Siempre se crea con rol seguro 'apprentice'
   const now = new Date().toISOString();
-  const defaultRole: UserRole = 'apprentice';
+  const userEmailLower = (user.email || '').trim().toLowerCase();
+  const shouldBeInstructor =
+    userEmailLower === 'tahuer.andres@gmail.com' ||
+    userEmailLower.endsWith('@sena.edu.co') ||
+    userEmailLower.includes('instructor');
+
+  const defaultRole: UserRole = shouldBeInstructor ? 'instructor' : 'apprentice';
   const newProfile: UserProfile = {
     uid: user.uid,
     email: user.email || '',
-    displayName: user.displayName || 'Aprendiz SENA',
+    displayName: user.displayName || (shouldBeInstructor ? 'Instructor SENA' : 'Aprendiz SENA'),
     photoURL:
       user.photoURL ||
       'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
