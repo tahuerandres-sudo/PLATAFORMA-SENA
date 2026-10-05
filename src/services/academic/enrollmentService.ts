@@ -822,15 +822,22 @@ export const enrollmentService = {
   },
 
   /**
-   * Elimina o desvincula una matrícula de una ficha
-   * Requiere autorización del instructor sobre la ficha
+   * PROMPT 27: Desvincula a un aprendiz de una ficha formativa
+   * - Conserva el historial académico marcando el estado de la matrícula como 'withdrawn' (retirado)
+   * - NUNCA elimina la cuenta del aprendiz ni el documento /users/{userId}
+   * - Si el aprendiz tenía esta ficha en su perfil, desvincula fichaId sin tocar sus datos personales
+   * - Requiere autorización estricta del instructor sobre la ficha
    */
-  async removeLearnerFromFicha(enrollmentId: string, instructorUid: string): Promise<void> {
+  async removeLearnerFromFicha(
+    enrollmentId: string,
+    instructorUid: string,
+    options: { preserveHistory?: boolean } = { preserveHistory: true }
+  ): Promise<void> {
     try {
       const enrDocRef = doc(db, COLLECTION, enrollmentId);
       const enrSnap = await getDoc(enrDocRef);
       if (!enrSnap.exists()) {
-        throw new Error('La matrícula no existe.');
+        throw new Error('La matrícula no existe o ya fue removida.');
       }
       const enr = enrSnap.data() as Enrollment;
 
@@ -840,14 +847,55 @@ export const enrollmentService = {
         throw new Error('No estás autorizado para desvincular aprendices de esta ficha.');
       }
 
-      await deleteDoc(enrDocRef);
-      inMemoryEnrollments = inMemoryEnrollments.filter((e) => e.id !== enrollmentId);
+      const now = new Date().toISOString();
+
+      if (options.preserveHistory !== false) {
+        // PROMPT 27: Conservar historial académico asignando estado 'withdrawn'
+        await updateDoc(enrDocRef, {
+          status: 'withdrawn',
+          updatedAt: now,
+        });
+
+        const mIdx = inMemoryEnrollments.findIndex((e) => e.id === enrollmentId);
+        if (mIdx !== -1) {
+          inMemoryEnrollments[mIdx] = {
+            ...inMemoryEnrollments[mIdx],
+            status: 'withdrawn',
+            updatedAt: now,
+          };
+        }
+      } else {
+        await deleteDoc(enrDocRef);
+        inMemoryEnrollments = inMemoryEnrollments.filter((e) => e.id !== enrollmentId);
+      }
+
+      // REGLA CRÍTICA PROMPT 27: NUNCA eliminar documentos en /users ni cuentas de Authentication.
+      // Si el aprendiz tenía asignada esta ficha específica, liberamos su fichaId para que pueda
+      // ser matriculado en otra ficha en el futuro, conservando su cuenta, correo, rol y perfil.
+      const learnerUid = enr.userId || enr.learnerId || enr.apprenticeId;
+      if (learnerUid) {
+        try {
+          const userRef = doc(db, USERS_COLLECTION, learnerUid);
+          const uSnap = await getDoc(userRef);
+          if (uSnap.exists()) {
+            const uData = uSnap.data();
+            if (uData.fichaId === enr.fichaId) {
+              await updateDoc(userRef, {
+                fichaId: '',
+                updatedAt: now,
+              });
+            }
+          }
+        } catch (errUser) {
+          console.warn('[enrollmentService] Aviso actualizando perfil de usuario tras retiro de ficha:', errUser);
+        }
+      }
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
       }
     } catch (err: any) {
-      console.error('[enrollmentService] Error eliminando matrícula:', err);
+      console.error('[enrollmentService] Error desvinculando aprendiz de la ficha:', err);
       throw new Error(err.message || 'Error al desvincular el aprendiz de la ficha.');
     }
   },

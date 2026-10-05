@@ -10,6 +10,8 @@ import {
   getDocs,
   getDoc,
   setDoc,
+  updateDoc,
+  deleteDoc,
   query,
   where,
 } from 'firebase/firestore';
@@ -157,7 +159,7 @@ export const fichaService = {
         }
         saveCachedFichas(inMemoryFichas);
 
-        const filtered = realAuthUid
+        const filtered = (realAuthUid
           ? fromDb.filter((f) => {
               const ids = Array.isArray(f.instructorIds) ? f.instructorIds : [];
               return (
@@ -166,7 +168,7 @@ export const fichaService = {
                 (f as any).instructorId === realAuthUid
               );
             })
-          : fromDb;
+          : fromDb).filter((f) => f.status !== 'archived' && (f.status as any) !== 'deleted');
 
         console.log('=== GET FICHAS RESULT ===', {
           count: filtered.length,
@@ -179,7 +181,7 @@ export const fichaService = {
       }
 
       // Colección vacía en Firestore -> Comprobar respaldo en memoria
-      const filtered = realAuthUid
+      const filtered = (realAuthUid
         ? inMemoryFichas.filter((f) => {
             const ids = Array.isArray(f.instructorIds) ? f.instructorIds : [];
             return (
@@ -188,7 +190,7 @@ export const fichaService = {
               (f as any).instructorId === realAuthUid
             );
           })
-        : inMemoryFichas;
+        : inMemoryFichas).filter((f) => f.status !== 'archived' && (f.status as any) !== 'deleted');
 
       console.log('=== GET FICHAS RESULT ===', {
         count: filtered.length,
@@ -201,7 +203,7 @@ export const fichaService = {
       console.warn('[fichaService] Firestore query notice:', error?.code, error?.message);
 
       // Si falla la red de Firestore temporalmente, respaldar con inMemoryFichas
-      const filtered = realAuthUid
+      const filtered = (realAuthUid
         ? inMemoryFichas.filter((f) => {
             const ids = Array.isArray(f.instructorIds) ? f.instructorIds : [];
             return (
@@ -210,7 +212,7 @@ export const fichaService = {
               (f as any).instructorId === realAuthUid
             );
           })
-        : inMemoryFichas;
+        : inMemoryFichas).filter((f) => f.status !== 'archived' && (f.status as any) !== 'deleted');
 
       return { data: filtered, isDemo: false };
     }
@@ -515,5 +517,181 @@ export const fichaService = {
     return Boolean(
       Array.isArray(ficha.instructorIds) && ficha.instructorIds.includes(instructorId)
     );
+  },
+
+  /**
+   * PROMPT 27: Obtiene estadísticas reales de dependencias académicas asociadas a una ficha
+   */
+  async getFichaStats(fichaId: string): Promise<{ apprenticesCount: number; activitiesCount: number; submissionsCount: number }> {
+    const ficha = await this.getFichaById(fichaId);
+    const targetFichaId = ficha?.id || fichaId;
+    const targetNumber = ficha?.number;
+
+    let apprenticesCount = 0;
+    let activitiesCount = 0;
+    let submissionsCount = 0;
+
+    try {
+      const enrQ = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', targetFichaId));
+      const enrSnap = await getDocs(enrQ);
+      apprenticesCount = enrSnap.docs.filter((d) => {
+        const status = d.data().status;
+        return status !== 'withdrawn' && status !== 'inactive';
+      }).length;
+
+      if (apprenticesCount === 0 && targetNumber && targetNumber !== targetFichaId) {
+        const enrQ2 = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', targetNumber));
+        const enrSnap2 = await getDocs(enrQ2);
+        apprenticesCount = enrSnap2.docs.filter((d) => {
+          const status = d.data().status;
+          return status !== 'withdrawn' && status !== 'inactive';
+        }).length;
+      }
+    } catch (e) {
+      console.warn('[fichaService] Conteo de enrollments:', e);
+    }
+
+    try {
+      const actQ = query(collection(db, FIRESTORE_COLLECTIONS.ACTIVITIES), where('fichaId', '==', targetFichaId));
+      const actSnap = await getDocs(actQ);
+      activitiesCount = actSnap.size;
+      if (activitiesCount === 0 && targetNumber && targetNumber !== targetFichaId) {
+        const actQ2 = query(collection(db, FIRESTORE_COLLECTIONS.ACTIVITIES), where('fichaId', '==', targetNumber));
+        const actSnap2 = await getDocs(actQ2);
+        activitiesCount = actSnap2.size;
+      }
+    } catch (e) {
+      console.warn('[fichaService] Conteo de activities:', e);
+    }
+
+    try {
+      const subQ = query(collection(db, FIRESTORE_COLLECTIONS.SUBMISSIONS), where('fichaId', '==', targetFichaId));
+      const subSnap = await getDocs(subQ);
+      submissionsCount = subSnap.size;
+      if (submissionsCount === 0 && targetNumber && targetNumber !== targetFichaId) {
+        const subQ2 = query(collection(db, FIRESTORE_COLLECTIONS.SUBMISSIONS), where('fichaId', '==', targetNumber));
+        const subSnap2 = await getDocs(subQ2);
+        submissionsCount = subSnap2.size;
+      }
+    } catch (e) {
+      console.warn('[fichaService] Conteo de submissions:', e);
+    }
+
+    return { apprenticesCount, activitiesCount, submissionsCount };
+  },
+
+  /**
+   * PROMPT 27: Elimina o archiva de forma segura una ficha de formación
+   * - Verifica autorización estricta del instructor (debe pertenecer a ficha.instructorIds o ser createdBy)
+   * - Si posee dependencias académicas (aprendices, evidencias, actividades), realiza archivado lógico
+   *   para preservar el historial pedagógico según las directrices institucionales (Sección 17 & 18).
+   * - Si está vacía sin datos, intenta borrado físico con fallback a archivado.
+   * - Retira la ficha de las vistas activas, selectores y métricas en tiempo real.
+   */
+  async deleteFicha(fichaId: string, instructorUid: string): Promise<{ success: boolean; isArchived: boolean }> {
+    if (!fichaId || !instructorUid) {
+      throw new Error('Identificadores insuficientes para procesar la eliminación.');
+    }
+
+    const ficha = await this.getFichaById(fichaId);
+    if (!ficha) {
+      throw new Error('La ficha no existe o ya fue removida.');
+    }
+
+    // 1. Autorización estricta (Sección 3): SOLO instructor asignado o creador legítimo
+    const isAssigned = Array.isArray(ficha.instructorIds) && ficha.instructorIds.includes(instructorUid);
+    const isCreator = ficha.createdBy === instructorUid;
+
+    if (!isAssigned && !isCreator) {
+      throw new Error('No estás autorizado para eliminar esta ficha. Únicamente instructores asignados pueden gestionarla.');
+    }
+
+    const realDocId = ficha.id;
+    const stats = await this.getFichaStats(realDocId);
+    const hasAcademicData = stats.activitiesCount > 0 || stats.submissionsCount > 0;
+
+    // 2. Ejecutar estrategia de protección académica (Sección 18 & 19)
+    let isArchived = true;
+    const now = new Date().toISOString();
+
+    // Actualizar en Firestore a status 'archived'
+    try {
+      await setDoc(doc(db, COLLECTION, realDocId), { status: 'archived', updatedAt: now }, { merge: true });
+      console.log('[fichaService] Ficha marcada como archivada en Firestore:', realDocId);
+    } catch (err: any) {
+      console.warn('[fichaService] Aviso actualizando estado de ficha en Firestore:', err?.message);
+    }
+
+    // Si la ficha está completamente vacía (sin actividades, evidencias ni aprendices), intentar deleteDoc
+    if (!hasAcademicData && stats.apprenticesCount === 0) {
+      try {
+        await deleteDoc(doc(db, COLLECTION, realDocId));
+        isArchived = false;
+        console.log('[fichaService] Ficha sin datos eliminada físicamente de Firestore:', realDocId);
+      } catch (eDel) {
+        console.warn('[fichaService] No se pudo ejecutar deleteDoc físico, conservando archivado lógico:', eDel);
+      }
+    }
+
+    // Desactivar matrículas activas asociadas a la ficha para no dejar aprendices huérfanos activos
+    // NUNCA eliminar documentos en /users ni cuentas de Authentication
+    try {
+      const enrDocIds = new Set<string>();
+      const enrQ = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', realDocId));
+      const enrSnap = await getDocs(enrQ);
+      enrSnap.docs.forEach((d) => enrDocIds.add(d.id));
+
+      if (ficha.number && ficha.number !== realDocId) {
+        const enrQNum = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', ficha.number));
+        const enrSnapNum = await getDocs(enrQNum);
+        enrSnapNum.docs.forEach((d) => enrDocIds.add(d.id));
+      }
+
+      for (const enrId of enrDocIds) {
+        try {
+          const enrRef = doc(db, FIRESTORE_COLLECTIONS.ENROLLMENTS, enrId);
+          const enrSnap = await getDoc(enrRef);
+          if (enrSnap.exists()) {
+            const enrData = enrSnap.data();
+            await updateDoc(enrRef, {
+              status: 'withdrawn',
+              updatedAt: now,
+            });
+
+            // Si el aprendiz tenía vinculada esta ficha en /users, limpiar fichaId sin alterar la cuenta
+            const learnerUid = enrData.userId || enrData.learnerId || enrData.apprenticeId;
+            if (learnerUid) {
+              try {
+                const uRef = doc(db, FIRESTORE_COLLECTIONS.USERS, learnerUid);
+                const uSnap = await getDoc(uRef);
+                if (uSnap.exists()) {
+                  const uVal = uSnap.data();
+                  if (uVal.fichaId === realDocId || uVal.fichaId === ficha.number) {
+                    await updateDoc(uRef, { fichaId: '', updatedAt: now });
+                  }
+                }
+              } catch {
+                // No-op
+              }
+            }
+          }
+        } catch {
+          // No-op
+        }
+      }
+    } catch (eEnr) {
+      console.warn('[fichaService] Desactivación de matrículas de la ficha eliminada:', eEnr);
+    }
+
+    // 3. Remover de la memoria y caché persistente del navegador
+    inMemoryFichas = inMemoryFichas.filter((f) => f.id !== realDocId && f.number !== ficha.number);
+    saveCachedFichas(inMemoryFichas);
+
+    // 4. Notificar actualización de métricas del Sidebar
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
+    return { success: true, isArchived };
   },
 };

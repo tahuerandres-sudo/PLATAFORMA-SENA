@@ -37,6 +37,7 @@ import {
   HelpCircle,
   Send,
   Trash2,
+  UserMinus,
 } from 'lucide-react';
 import {
   Ficha,
@@ -150,6 +151,24 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [editShift, setEditShift] = useState<FichaShift>('morning');
   const [editStage, setEditStage] = useState<FichaStage>('lectiva');
   const [editDescription, setEditDescription] = useState('');
+
+  // PROMPT 27: Estado y funciones para Eliminar Ficha de forma segura
+  const [isDeleteFichaModalOpen, setIsDeleteFichaModalOpen] = useState(false);
+  const [fichaToDelete, setFichaToDelete] = useState<Ficha | null>(null);
+  const [deleteFichaStats, setDeleteFichaStats] = useState<{
+    apprenticesCount: number;
+    activitiesCount: number;
+    submissionsCount: number;
+  } | null>(null);
+  const [loadingDeleteStats, setLoadingDeleteStats] = useState(false);
+  const [isDeletingFicha, setIsDeletingFicha] = useState(false);
+  const [deleteFichaError, setDeleteFichaError] = useState<string | null>(null);
+
+  // PROMPT 27: Estado y funciones para Quitar Aprendiz de una Ficha
+  const [isRemoveLearnerModalOpen, setIsRemoveLearnerModalOpen] = useState(false);
+  const [learnerToRemove, setLearnerToRemove] = useState<ApprenticeWithEnrollment | null>(null);
+  const [isRemovingLearner, setIsRemovingLearner] = useState(false);
+  const [removeLearnerError, setRemoveLearnerError] = useState<string | null>(null);
 
   // 1. Cargar catálogo principal de fichas del instructor
   const loadFichasAndCatalogs = useCallback(async () => {
@@ -388,6 +407,78 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     }
   };
 
+  // PROMPT 27: Abrir modal de confirmación de eliminación con estadísticas reales de Firestore
+  const openDeleteFichaModal = async (targetFicha: Ficha) => {
+    setFichaToDelete(targetFicha);
+    setDeleteFichaError(null);
+    setIsDeleteFichaModalOpen(true);
+    setLoadingDeleteStats(true);
+    try {
+      const stats = await fichaService.getFichaStats(targetFicha.id);
+      setDeleteFichaStats(stats);
+    } catch {
+      setDeleteFichaStats({
+        apprenticesCount: fichaStats[targetFicha.id]?.apprenticesCount || 0,
+        activitiesCount: fichaStats[targetFicha.id]?.activitiesCount || 0,
+        submissionsCount: 0,
+      });
+    } finally {
+      setLoadingDeleteStats(false);
+    }
+  };
+
+  // PROMPT 27: Confirmar eliminación de la ficha
+  const handleConfirmDeleteFicha = async () => {
+    if (!fichaToDelete) return;
+    setIsDeletingFicha(true);
+    setDeleteFichaError(null);
+    try {
+      await fichaService.deleteFicha(fichaToDelete.id, instructorUid);
+      setIsDeleteFichaModalOpen(false);
+      const deletedId = fichaToDelete.id;
+      setFichaToDelete(null);
+
+      // Si la ficha eliminada era la ficha activa, volver al grid
+      if (activeFichaId === deletedId) {
+        setActiveFichaId('');
+        setViewMode('grid');
+      }
+
+      await loadFichasAndCatalogs();
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error eliminando ficha:', err);
+      setDeleteFichaError(err?.message || 'Error al eliminar la ficha de formación.');
+    } finally {
+      setIsDeletingFicha(false);
+    }
+  };
+
+  // PROMPT 27: Abrir modal para quitar aprendiz de la ficha
+  const openRemoveLearnerModal = (apprentice: ApprenticeWithEnrollment) => {
+    setLearnerToRemove(apprentice);
+    setRemoveLearnerError(null);
+    setIsRemoveLearnerModalOpen(true);
+  };
+
+  // PROMPT 27: Confirmar desvinculación del aprendiz
+  const handleConfirmRemoveLearner = async () => {
+    if (!learnerToRemove) return;
+    setIsRemovingLearner(true);
+    setRemoveLearnerError(null);
+    try {
+      await enrollmentService.removeLearnerFromFicha(learnerToRemove.enrollmentId, instructorUid);
+      setIsRemoveLearnerModalOpen(false);
+      setLearnerToRemove(null);
+      await loadActiveFichaClassData();
+      await loadFichasAndCatalogs();
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error desvinculando aprendiz:', err);
+      setRemoveLearnerError(err?.message || 'Error al desvincular el aprendiz de la ficha.');
+    } finally {
+      setIsRemovingLearner(false);
+    }
+  };
+
   // Publicar Anuncio rápido en el Muro de la Ficha
   const handleQuickPublishAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -539,6 +630,15 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               >
                 <Edit2 className="w-3.5 h-3.5" />
                 Editar
+              </button>
+
+              <button
+                onClick={() => openDeleteFichaModal(activeFicha)}
+                className="px-3 py-2 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-400/40 flex items-center gap-1.5 cursor-pointer"
+                title="Eliminar esta ficha de formación"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-300" />
+                Eliminar ficha
               </button>
             </div>
           </div>
@@ -788,7 +888,11 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                                 {apprentice.assignedAt ? new Date(apprentice.assignedAt).toLocaleDateString('es-CO') : '—'}
                               </td>
                               <td className="p-3 text-center">
-                                {isPending ? (
+                                {apprentice.enrollmentStatus === 'withdrawn' ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                    Retirado
+                                  </span>
+                                ) : isPending ? (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
                                     <Clock className="w-3 h-3 text-amber-600" />
                                     Pendiente primer login
@@ -798,14 +902,26 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                                 )}
                               </td>
                               <td className="p-3 text-right">
-                                <button
-                                  onClick={() => setSelectedApprenticeProfile(apprentice)}
-                                  className="px-2 py-1 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                  title="Ver Expediente"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                  Expediente
-                                </button>
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    onClick={() => setSelectedApprenticeProfile(apprentice)}
+                                    className="px-2 py-1 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                    title="Ver Expediente"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Expediente
+                                  </button>
+                                  {apprentice.enrollmentStatus !== 'withdrawn' && (
+                                    <button
+                                      onClick={() => openRemoveLearnerModal(apprentice)}
+                                      className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                      title="Quitar aprendiz de esta ficha"
+                                    >
+                                      <UserMinus className="w-3.5 h-3.5" />
+                                      Quitar
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1286,17 +1402,28 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
                   {/* Botones de Acción */}
                   <div className="space-y-2 pt-2 border-t border-slate-100">
-                    <button
-                      onClick={() => {
-                        setActiveFichaId(ficha.id);
-                        setViewMode('detail');
-                        onSelectFicha?.(ficha.id);
-                      }}
-                      className="w-full py-2.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer group-hover:bg-[#39A900]"
-                    >
-                      <span>Entrar a la ficha</span>
-                      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setActiveFichaId(ficha.id);
+                          setViewMode('detail');
+                          onSelectFicha?.(ficha.id);
+                        }}
+                        className="flex-1 py-2.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer group-hover:bg-[#39A900]"
+                      >
+                        <span>Entrar a la ficha</span>
+                        <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                      </button>
+
+                      <button
+                        onClick={() => openDeleteFichaModal(ficha)}
+                        className="p-2.5 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl transition-all border border-slate-200 hover:border-rose-200 cursor-pointer"
+                        title="Eliminar ficha de formación"
+                        aria-label="Eliminar ficha"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
 
                     <button
                       onClick={() => {
@@ -1549,6 +1676,205 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
           loadFichasAndCatalogs();
         }}
       />
+
+      {/* =========================================================================
+          MODAL: ELIMINAR FICHA DE FORMACIÓN (PROMPT 27)
+         ========================================================================= */}
+      <Modal
+        isOpen={isDeleteFichaModalOpen}
+        onClose={() => !isDeletingFicha && setIsDeleteFichaModalOpen(false)}
+        title="¿Eliminar esta ficha de formación?"
+      >
+        {fichaToDelete && (
+          <div className="space-y-4">
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+              <p className="text-xs text-slate-600">
+                Estás a punto de eliminar la ficha:
+              </p>
+              <div className="text-base font-extrabold text-[#00324D] tracking-tight">
+                {fichaToDelete.name || fichaToDelete.programName || `Ficha ${fichaToDelete.number}`}
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-[#00324D] text-[#8CE665] rounded font-mono font-bold text-xs">
+                Ficha #{fichaToDelete.number}
+              </div>
+              <p className="text-xs text-slate-500 pt-1">
+                Esta acción eliminará la ficha del listado de fichas administradas por el instructor.
+              </p>
+            </div>
+
+            {/* Datos reales consultados de Firestore */}
+            <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-xs">
+              <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Dependencias Académicas Registradas (Firestore Real)</span>
+              </div>
+
+              {loadingDeleteStats ? (
+                <div className="flex items-center gap-2 text-amber-800 text-xs py-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                  <span>Consultando dependencias en Firestore...</span>
+                </div>
+              ) : (
+                <div className="space-y-1.5 text-slate-700">
+                  <div className="flex items-center justify-between py-1 border-b border-amber-200/50">
+                    <span className="text-slate-600">Aprendices matriculados:</span>
+                    <strong className="font-mono text-[#00324D]">
+                      {deleteFichaStats?.apprenticesCount ?? 0} {deleteFichaStats?.apprenticesCount === 1 ? 'aprendiz' : 'aprendices'}
+                    </strong>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-b border-amber-200/50">
+                    <span className="text-slate-600">Actividades formativas:</span>
+                    <strong className="font-mono text-[#00324D]">
+                      {deleteFichaStats?.activitiesCount ?? 0} {deleteFichaStats?.activitiesCount === 1 ? 'actividad' : 'actividades'}
+                    </strong>
+                  </div>
+                  <div className="flex items-center justify-between py-1">
+                    <span className="text-slate-600">Evidencias / Entregas registradas:</span>
+                    <strong className="font-mono text-[#00324D]">
+                      {deleteFichaStats?.submissionsCount ?? 0} {deleteFichaStats?.submissionsCount === 1 ? 'evidencia' : 'evidencias'}
+                    </strong>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-1">
+              <strong className="font-bold block">Protección de Datos Académicos SENA:</strong>
+              <p className="text-[11px] text-emerald-800">
+                • Los usuarios de los aprendices en <code className="font-mono text-emerald-950 font-semibold">/users</code> y cuentas de Google NO serán eliminados.
+                <br />
+                • Las matrículas se marcarán como retiradas y las evidencias se archivarán para garantizar la custodia y trazabilidad pedagógica.
+              </p>
+            </div>
+
+            {deleteFichaError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{deleteFichaError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeletingFicha}
+                onClick={() => setIsDeleteFichaModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingFicha}
+                onClick={handleConfirmDeleteFicha}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingFicha ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Eliminando ficha...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Eliminar ficha</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* =========================================================================
+          MODAL: QUITAR APRENDIZ DE LA FICHA (PROMPT 27)
+         ========================================================================= */}
+      <Modal
+        isOpen={isRemoveLearnerModalOpen}
+        onClose={() => !isRemovingLearner && setIsRemoveLearnerModalOpen(false)}
+        title="¿Quitar aprendiz de la ficha?"
+      >
+        {learnerToRemove && (
+          <div className="space-y-4">
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+              <p className="text-xs text-slate-600">
+                Estás a punto de desvincular al siguiente aprendiz:
+              </p>
+              <div className="flex items-center gap-3">
+                <img
+                  src={learnerToRemove.photoURL}
+                  alt={learnerToRemove.displayName}
+                  className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200 shrink-0"
+                />
+                <div>
+                  <div className="text-sm font-bold text-slate-900">
+                    {learnerToRemove.displayName}
+                  </div>
+                  <div className="text-xs font-mono text-slate-600">
+                    {learnerToRemove.email}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono">
+                    {learnerToRemove.documentNumber !== 'No registrado' ? `CC ${learnerToRemove.documentNumber}` : 'Sin CC'}
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 pt-1">
+                Ficha: <strong className="font-mono text-[#00324D]">#{activeFicha?.number || learnerToRemove.fichaNumber}</strong>
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-sky-50 border border-sky-200 rounded-xl space-y-1.5 text-xs text-sky-950">
+              <strong className="font-bold flex items-center gap-1 text-sky-900">
+                <CheckCircle2 className="w-4 h-4 text-sky-600" />
+                Garantía de Integridad de Cuenta:
+              </strong>
+              <p className="text-[11px] text-sky-800 leading-relaxed">
+                • La cuenta de usuario del aprendiz en <code className="font-mono font-semibold">/users</code> y su acceso de Google NO serán eliminados.
+                <br />
+                • Su matrícula pasará al estado de <strong>retirado (withdrawn)</strong> para salvaguardar su historial de evidencias y calificaciones.
+                <br />
+                • Podrás volver a matricularlo en esta u otra ficha en cualquier momento.
+              </p>
+            </div>
+
+            {removeLearnerError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{removeLearnerError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isRemovingLearner}
+                onClick={() => setIsRemoveLearnerModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isRemovingLearner}
+                onClick={handleConfirmRemoveLearner}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isRemovingLearner ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Desvinculando...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserMinus className="w-3.5 h-3.5" />
+                    <span>Quitar aprendiz de la ficha</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

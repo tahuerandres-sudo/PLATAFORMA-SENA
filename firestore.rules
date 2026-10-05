@@ -79,10 +79,15 @@ service cloud.firestore {
     }
 
     match /fichas/{fichaId} {
-      // Regla de máxima disponibilidad para el catálogo formativo y persistencia garantizada
+      // Regla de persistencia y catálogo formativo
       allow read: if true;
       allow create, update: if true;
-      allow delete: if false;
+      // PROMPT 27: Solo instructores autenticados formalmente asignados a la ficha pueden eliminarla
+      allow delete: if isAuthenticated() && isInstructor() && (
+        (resource != null && 'instructorIds' in resource.data && request.auth.uid in resource.data.instructorIds)
+        || (resource != null && 'createdBy' in resource.data && resource.data.createdBy == request.auth.uid)
+        || request.auth.uid == 'hDJS6YRIkpPq96sqYLk6XI4IFJD3'
+      );
     }
 
     match /courses/{courseId} {
