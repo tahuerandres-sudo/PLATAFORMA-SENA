@@ -12,6 +12,7 @@ import {
   Clock,
   Tag,
   ArrowRight,
+  ArrowLeft,
   Search,
   Filter,
   CheckCircle2,
@@ -50,10 +51,14 @@ import { useAuth } from '../../hooks/useAuth';
 
 interface InstructorActivitiesViewProps {
   onNavigateToSubmissions: (activityId: string) => void;
+  fichaId?: string;
+  onBackToFichas?: () => void;
 }
 
 export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> = ({
   onNavigateToSubmissions,
+  fichaId,
+  onBackToFichas,
 }) => {
   const { userProfile, currentUser } = useAuth();
   const instructorUid = currentUser?.uid || userProfile?.uid;
@@ -76,8 +81,8 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
   const [isRubricDetailOpen, setIsRubricDetailOpen] = useState(false);
   const [viewingRubric, setViewingRubric] = useState<Rubric | null>(null);
 
-  // Filtros
-  const [selectedFicha, setSelectedFicha] = useState<string>('all');
+  // Filtros (si viene fichaId, preseleccionar y fijar dicha ficha)
+  const [selectedFicha, setSelectedFicha] = useState<string>(fichaId || 'all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -88,7 +93,9 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
     setLoading(true);
     try {
       const [actsRes, fichasRes, progsRes, coursesRes, rapsRes, compsRes] = await Promise.all([
-        activityService.getActivities(),
+        fichaId
+          ? activityService.getActivitiesByFicha(fichaId, instructorUid)
+          : activityService.getActivities(),
         fichaService.getFichas(instructorUid),
         getTrainingPrograms(),
         getCourses(),
@@ -103,15 +110,18 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
       setLearningOutcomes(rapsRes.data || []);
       setCompetencies(compsRes.data || []);
 
-      // Si el instructor tiene fichas asignadas específicas, acotar actividades a dichas fichas
-      const assignedFichaIds = loadedFichas.map((f) => f.id);
       let relevantActs: EvidenceActivity[] = [];
-      if (assignedFichaIds.length > 0) {
-        relevantActs = actsRes.data.filter(
-          (a) => assignedFichaIds.includes(a.fichaId) || a.createdBy === instructorUid
-        );
+      if (fichaId) {
+        relevantActs = actsRes.data || [];
       } else {
-        relevantActs = actsRes.data.filter((a) => a.createdBy === instructorUid);
+        const assignedFichaIds = loadedFichas.map((f) => f.id);
+        if (assignedFichaIds.length > 0) {
+          relevantActs = (actsRes.data || []).filter(
+            (a) => assignedFichaIds.includes(a.fichaId) || a.createdBy === instructorUid
+          );
+        } else {
+          relevantActs = (actsRes.data || []).filter((a) => a.createdBy === instructorUid);
+        }
       }
       setActivities(relevantActs);
 
@@ -512,15 +522,17 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
       )}
 
       {/* Modal: Crear / Editar Actividad Formativa */}
-      <ActivityFormModal
-        isOpen={isCreateModalOpen}
-        onClose={() => {
-          setIsCreateModalOpen(false);
-          setEditingActivity(null);
-        }}
-        onActivitySaved={handleActivitySaved}
-        initialActivity={editingActivity}
-      />
+      {isCreateModalOpen && (
+        <ActivityFormModal
+          isOpen={isCreateModalOpen}
+          onClose={() => {
+            setIsCreateModalOpen(false);
+            setEditingActivity(null);
+          }}
+          onActivitySaved={handleActivitySaved}
+          initialActivity={editingActivity}
+        />
+      )}
 
       {/* Modal: Crear / Editar Rúbrica Pedagógica (Prompt 19) */}
       {isRubricModalOpen && (

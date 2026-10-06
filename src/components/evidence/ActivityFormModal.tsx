@@ -43,6 +43,7 @@ import { competencyService } from '../../services/academic/competencyService';
 import { learningOutcomeService } from '../../services/academic/learningOutcomeService';
 import { activityService } from '../../services/academic/activityService';
 import { rubricService } from '../../services/academic/rubricService';
+import { fichaService } from '../../services/academic/fichaService';
 import { EVIDENCE_TYPE_CONFIGS, getEvidenceTypeConfig } from '../../config/fileLimits';
 import { Modal } from '../ui/Modal';
 import { RubricFormModal } from '../rubrics/RubricFormModal';
@@ -113,6 +114,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
 
   // Cargar rúbricas disponibles para la ficha seleccionada
   useEffect(() => {
+    if (!isOpen) return;
     async function loadFichaRubrics() {
       if (!fichaId) {
         setAvailableRubrics([]);
@@ -126,17 +128,18 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       }
     }
     loadFichaRubrics();
-  }, [fichaId]);
+  }, [isOpen, fichaId]);
 
   // Carga inicial de datos de catálogo
   useEffect(() => {
     async function initCatalog() {
       setLoadingCatalog(true);
       try {
-        const [progs, fList] = await Promise.all([
+        const [progs, fetchedFichas] = await Promise.all([
           getTrainingPrograms(),
           getFichasForInstructor(instructorUid),
         ]);
+        let fList = [...fetchedFichas];
 
         setAllPrograms(progs);
         setAllFichas(fList);
@@ -173,10 +176,25 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
           let initialFicha = fList[0]?.id || '';
 
           if (defaultFichaId) {
-            const matchedFicha = fList.find((f) => f.id === defaultFichaId || f.number === defaultFichaId);
+            let matchedFicha = fList.find((f) => f.id === defaultFichaId || f.number === defaultFichaId);
+            if (!matchedFicha) {
+              try {
+                const directF = await fichaService.getFichaById(defaultFichaId);
+                if (directF) {
+                  matchedFicha = directF;
+                  fList = [directF, ...fList];
+                  setAllFichas(fList);
+                }
+              } catch (eF) {
+                console.warn('[ActivityFormModal] Error buscando ficha directa:', eF);
+              }
+            }
+
             if (matchedFicha) {
               initialFicha = matchedFicha.id;
               if (matchedFicha.programId) initialProg = matchedFicha.programId;
+            } else {
+              initialFicha = defaultFichaId;
             }
           } else {
             const matchingFichas = fList.filter((f) => f.programId === initialProg);
@@ -221,6 +239,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
 
   // Filtro en Cascada 2: Cursos disponibles según la Ficha seleccionada
   useEffect(() => {
+    if (!isOpen) return;
     async function loadCourses() {
       if (!fichaId) return;
       try {
@@ -234,10 +253,11 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       }
     }
     loadCourses();
-  }, [fichaId]);
+  }, [isOpen, fichaId]);
 
   // Filtro en Cascada 3: Competencias disponibles según el Programa y Curso
   useEffect(() => {
+    if (!isOpen) return;
     async function loadCompetencies() {
       try {
         const res = await competencyService.getCompetencies({
@@ -254,10 +274,11 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       }
     }
     loadCompetencies();
-  }, [programId, courseId, fichaId]);
+  }, [isOpen, programId, courseId, fichaId]);
 
   // Filtro en Cascada 4: Resultados de Aprendizaje (RAP) estrictamente asociados a la Competencia seleccionada (Requisito 17)
   useEffect(() => {
+    if (!isOpen) return;
     async function loadOutcomes() {
       if (!competencyId) {
         setLearningOutcomes([]);
@@ -277,7 +298,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       }
     }
     loadOutcomes();
-  }, [competencyId, programId]);
+  }, [isOpen, competencyId, programId]);
 
   // Al cambiar tipo de evidencia, ajustar tamaño sugerido
   const handleTypeChange = (newType: EvidenceType) => {
@@ -464,35 +485,59 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
                 <label className="block font-semibold text-slate-700 mb-1">
                   1. Programa de Formación *
                 </label>
-                <select
-                  value={programId}
-                  onChange={(e) => handleProgramChange(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
-                >
-                  {allPrograms.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.level})
-                    </option>
-                  ))}
-                </select>
+                {defaultFichaId ? (
+                  <div className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-800 font-semibold text-xs truncate">
+                    {allPrograms.find((p) => p.id === programId)?.name || 'Programa de la Ficha'}
+                  </div>
+                ) : (
+                  <select
+                    value={programId}
+                    onChange={(e) => handleProgramChange(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                  >
+                    {allPrograms.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.level})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
-              {/* 2. Ficha de Formación (Filtrada por programa) */}
+              {/* 2. Ficha de Formación (PROMPT 28: Preseleccionada y Bloqueada) */}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
                   2. Ficha de Formación *
                 </label>
-                <select
-                  value={fichaId}
-                  onChange={(e) => setFichaId(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
-                >
-                  {availableFichas.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      Ficha #{f.number} {f.name ? `· ${f.name}` : ''}
-                    </option>
-                  ))}
-                </select>
+                {defaultFichaId ? (
+                  <div className="w-full px-3 py-1.5 border border-[#39A900]/40 rounded-lg bg-[#EBF8E7]/60 text-slate-900 font-semibold flex items-center justify-between">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="bg-[#00324D] text-[#8CE665] font-mono text-[11px] px-2 py-0.5 rounded font-bold shrink-0">
+                        FICHA #{allFichas.find((f) => f.id === fichaId || f.number === fichaId)?.number || defaultFichaId}
+                      </span>
+                      <span className="text-xs font-bold text-[#00324D] truncate">
+                        {allFichas.find((f) => f.id === fichaId || f.number === fichaId)?.name ||
+                         allFichas.find((f) => f.id === fichaId || f.number === fichaId)?.programName ||
+                         'Ficha Asignada'}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-[#2E8500] font-bold bg-white px-2 py-0.5 rounded border border-[#39A900]/30 shrink-0">
+                      Asignada fija
+                    </span>
+                  </div>
+                ) : (
+                  <select
+                    value={fichaId}
+                    onChange={(e) => setFichaId(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                  >
+                    {availableFichas.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        Ficha #{f.number} {f.name ? `· ${f.name}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               {/* 3. Curso / Ambiente (Opcional) */}

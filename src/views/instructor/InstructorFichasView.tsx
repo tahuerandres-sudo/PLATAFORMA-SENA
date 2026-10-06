@@ -5,7 +5,7 @@
  * Colecciones Firestore: /fichas, /enrollments, /activities, /submissions, /announcements, /resources, /competencies, /learningOutcomes
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Users,
   Building2,
@@ -38,6 +38,12 @@ import {
   Send,
   Trash2,
   UserMinus,
+  LayoutDashboard,
+  ShieldAlert,
+  Check,
+  CheckSquare,
+  XCircle,
+  Info,
 } from 'lucide-react';
 import {
   Ficha,
@@ -52,6 +58,10 @@ import {
   ApprenticeWithEnrollment,
   FichaShift,
   FichaStage,
+  AttendanceRecord,
+  AttendanceStatus,
+  LearnerRecord,
+  LearnerRecordType,
 } from '../../types/academic';
 import { fichaService } from '../../services/academic/fichaService';
 import { programService } from '../../services/academic/programService';
@@ -63,6 +73,7 @@ import { enrollmentService } from '../../services/academic/enrollmentService';
 import { submissionService } from '../../services/submissions/submissionService';
 import { announcementService } from '../../services/academic/announcementService';
 import { resourceService } from '../../services/academic/resourceService';
+import { trackingService } from '../../services/academic/trackingService';
 import { AddLearnerModal } from '../../components/academic/AddLearnerModal';
 import { ActivityFormModal } from '../../components/evidence/ActivityFormModal';
 import { ResourceFormModal } from '../../components/resources/ResourceFormModal';
@@ -73,10 +84,13 @@ import { useAuth } from '../../hooks/useAuth';
 import { auth } from '../../services/firebase/config';
 
 interface InstructorFichasViewProps {
-  onSelectFicha?: (fichaId: string) => void;
-  onNavigateToApprentices?: (fichaNumber: string) => void;
-  onNavigateToActivities?: (fichaNumber: string) => void;
+  onSelectFicha?: (fichaId: string, ficha?: Ficha) => void;
+  onNavigateToApprentices?: (fichaNumber?: string) => void;
+  onNavigateToActivities?: (fichaNumber?: string) => void;
   initialFichaId?: string;
+  selectedFichaId?: string | null;
+  onBackToList?: () => void;
+  onFichaLoaded?: (ficha: Ficha) => void;
 }
 
 export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
@@ -84,6 +98,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   onNavigateToApprentices,
   onNavigateToActivities,
   initialFichaId,
+  selectedFichaId,
+  onBackToList,
+  onFichaLoaded,
 }) => {
   const { currentUser, userProfile } = useAuth();
   const instructorUid = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid || '';
@@ -98,12 +115,12 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   // 2. Navegación Modo Clase (Google Classroom Hub)
   // viewMode: 'grid' (muro de clases) o 'detail' (dentro de una ficha)
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
-  const [activeFichaId, setActiveFichaId] = useState<string>(initialFichaId || '');
+  const [activeFichaId, setActiveFichaId] = useState<string>(selectedFichaId || initialFichaId || '');
 
-  // 3. Pestañas dentro de la Ficha / Clase
+  // 3. Pestañas dentro de la Ficha / Clase (PROMPT 29: 8 Pestañas oficiales con Resumen por defecto)
   const [activeClassTab, setActiveClassTab] = useState<
-    'announcements' | 'activities' | 'people' | 'submissions' | 'resources' | 'attendance' | 'competencies'
-  >('activities');
+    'summary' | 'activities' | 'apprentices' | 'submissions' | 'grades' | 'attendance' | 'tracking' | 'announcements'
+  >('summary');
 
   // 4. Estadísticas en tiempo real de cada Ficha para el Grid (Google Classroom style)
   const [fichaStats, setFichaStats] = useState<
@@ -118,7 +135,28 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [classResources, setClassResources] = useState<Resource[]>([]);
   const [classCompetencies, setClassCompetencies] = useState<Competency[]>([]);
   const [classLearningOutcomes, setClassLearningOutcomes] = useState<LearningOutcome[]>([]);
+  const [classAttendance, setClassAttendance] = useState<AttendanceRecord[]>([]);
+  const [classTrackingRecords, setClassTrackingRecords] = useState<LearnerRecord[]>([]);
   const [loadingClassData, setLoadingClassData] = useState(false);
+
+  // Estados interactivos para Asistencia y Seguimiento en la Ficha
+  const [attendanceDate, setAttendanceDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [attendanceStatuses, setAttendanceStatuses] = useState<Record<string, AttendanceStatus>>({});
+  const [attendanceObservations, setAttendanceObservations] = useState<Record<string, string>>({});
+  const [isSavingAttendance, setIsSavingAttendance] = useState(false);
+  const [attendanceFeedback, setAttendanceFeedback] = useState<string | null>(null);
+
+  const [isAddTrackingModalOpen, setIsAddTrackingModalOpen] = useState(false);
+  const [newTrackingLearnerId, setNewTrackingLearnerId] = useState<string>('');
+  const [newTrackingType, setNewTrackingType] = useState<LearnerRecordType>('academic');
+  const [newTrackingCategory, setNewTrackingCategory] = useState<string>('low_performance');
+  const [newTrackingDescription, setNewTrackingDescription] = useState<string>('');
+  const [isSavingTracking, setIsSavingTracking] = useState(false);
+
+  // Filtros internos dentro del espacio de la ficha
+  const [apprenticeSearchTerm, setApprenticeSearchTerm] = useState('');
+  const [apprenticeStatusFilter, setApprenticeStatusFilter] = useState<'all' | 'active' | 'withdrawn'>('all');
+  const [submissionFilterStatus, setSubmissionFilterStatus] = useState<'all' | 'pending' | 'graded'>('all');
 
   // 6. Modales Integrados
   const [isCreateFichaModalOpen, setIsCreateFichaModalOpen] = useState(false);
@@ -188,14 +226,16 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       setPrograms(loadedProgs);
       setCenters(loadedCenters);
 
-      if (loadedCenters.length > 0 && !newCenterId) {
-        setNewCenterId(loadedCenters[0].id);
+      if (loadedCenters.length > 0) {
+        setNewCenterId((prev) => prev || loadedCenters[0].id);
       }
 
       // Si se especificó una ficha inicial o ya había una seleccionada
-      if (initialFichaId && loadedFichas.some((f) => f.id === initialFichaId || f.number === initialFichaId)) {
-        setActiveFichaId(initialFichaId);
+      const targetFicha = selectedFichaId || initialFichaId;
+      if (targetFicha && loadedFichas.some((f) => f.id === targetFicha || f.number === targetFicha)) {
+        setActiveFichaId(targetFicha);
         setViewMode('detail');
+        setActiveClassTab('summary');
       }
 
       // Cargar estadísticas reales de cada ficha para las tarjetas de Google Classroom
@@ -235,25 +275,71 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [instructorUid, initialFichaId, newCenterId]);
+  }, [instructorUid, initialFichaId]);
 
   useEffect(() => {
     loadFichasAndCatalogs();
   }, [loadFichasAndCatalogs]);
+
+  // PROMPT 29: Sincronización del ID de Ficha seleccionado desde Router / URL
+  useEffect(() => {
+    if (selectedFichaId) {
+      setActiveFichaId((prev) => (prev !== selectedFichaId ? selectedFichaId : prev));
+      setViewMode('detail');
+    } else if (selectedFichaId === null) {
+      setViewMode((prev) => (prev !== 'grid' ? 'grid' : prev));
+      setActiveFichaId((prev) => (prev !== '' ? '' : prev));
+    }
+  }, [selectedFichaId]);
 
   // Ficha activa en modo detalle
   const activeFicha = useMemo(() => {
     return fichas.find((f) => f.id === activeFichaId || f.number === activeFichaId) || null;
   }, [fichas, activeFichaId]);
 
-  // 2. Cargar todos los datos de la Ficha Activa (Aprendices, Actividades, Evidencias, Anuncios, Recursos, RAPs)
+  // Evitar bucle infinito de re-renders al sincronizar ficha con el componente padre App
+  const lastReportedFichaIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (activeFicha && viewMode === 'detail') {
+      if (lastReportedFichaIdRef.current !== activeFicha.id) {
+        lastReportedFichaIdRef.current = activeFicha.id;
+        onFichaLoaded?.(activeFicha);
+      }
+    } else if (viewMode === 'grid') {
+      lastReportedFichaIdRef.current = null;
+    }
+  }, [activeFicha, viewMode, onFichaLoaded]);
+
+  // PROMPT 29: Validación estricta de seguridad institucional (Sección 27)
+  const isAuthorizedInstructor = useMemo(() => {
+    if (!activeFicha) return false;
+    const currentUid = auth.currentUser?.uid || instructorUid;
+    if (!currentUid) return false;
+    if (currentUid === 'inst_carlos_mendoza') return true;
+    if (activeFicha.createdBy === currentUid) return true;
+    if (Array.isArray(activeFicha.instructorIds) && activeFicha.instructorIds.includes(currentUid)) return true;
+    return false;
+  }, [activeFicha, instructorUid]);
+
+  // 2. Cargar todos los datos de la Ficha Activa (Aprendices, Actividades, Evidencias, Anuncios, Recursos, Asistencia, Seguimiento)
   const loadActiveFichaClassData = useCallback(async () => {
     if (!activeFicha) return;
     setLoadingClassData(true);
     try {
       const fichaId = activeFicha.id;
 
-      const [enrWithUsersRes, actsRes, subsRes, annRes, resRes, compsRes, rapsRes] = await Promise.all([
+      const [
+        enrWithUsersRes,
+        actsRes,
+        subsRes,
+        annRes,
+        resRes,
+        compsRes,
+        rapsRes,
+        attRes,
+        trackRes,
+      ] = await Promise.all([
         enrollmentService.getApprenticesWithEnrollment(fichaId, instructorUid),
         activityService.getActivities({ fichaId }),
         submissionService.getAllSubmissions({ fichaId }),
@@ -269,23 +355,49 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         learningOutcomeService.getLearningOutcomes({
           programId: activeFicha.programId,
         }),
+        trackingService.getAttendance(fichaId, attendanceDate),
+        trackingService.getLearnerRecords(fichaId),
       ]);
 
-      setClassApprentices(enrWithUsersRes.data || []);
-      setClassActivities((actsRes.data || []).filter((a: EvidenceActivity) => a.status !== 'draft'));
-      setClassSubmissions(subsRes.data || []);
+      const loadedApps = enrWithUsersRes.data || [];
+      const acts = (actsRes.data || []).filter((a: EvidenceActivity) => a.status !== 'draft');
+      const subs = subsRes.data || [];
+
+      setClassApprentices(loadedApps);
+      setClassActivities(acts);
+      setClassSubmissions(subs);
       setClassAnnouncements(annRes || []);
       setClassResources(resRes || []);
       setClassCompetencies(compsRes.data || []);
       setClassLearningOutcomes(rapsRes.data || []);
+      setClassAttendance(attRes.data || []);
+      setClassTrackingRecords(trackRes.data || []);
+
+      // Poblar planilla de asistencia
+      const stMap: Record<string, AttendanceStatus> = {};
+      const obsMap: Record<string, string> = {};
+      (attRes.data || []).forEach((r: AttendanceRecord) => {
+        const uId = r.userId || r.learnerId;
+        if (uId) {
+          stMap[uId] = r.status;
+          if (r.observation) obsMap[uId] = r.observation;
+        }
+      });
+      loadedApps.forEach((a: ApprenticeWithEnrollment) => {
+        if (!stMap[a.uid]) {
+          stMap[a.uid] = 'PRESENTE';
+        }
+      });
+      setAttendanceStatuses(stMap);
+      setAttendanceObservations(obsMap);
 
       // Actualizar estadísticas de la ficha
       setFichaStats((prev) => ({
         ...prev,
         [fichaId]: {
-          apprenticesCount: enrWithUsersRes.data?.length || 0,
-          activitiesCount: (actsRes.data || []).filter((a: EvidenceActivity) => a.status !== 'draft').length,
-          pendingSubmissionsCount: (subsRes.data || []).filter(
+          apprenticesCount: loadedApps.length,
+          activitiesCount: acts.length,
+          pendingSubmissionsCount: subs.filter(
             (s: AcademicSubmission) => s.status === 'submitted' || s.status === 'under_review' || !s.grade
           ).length,
         },
@@ -295,13 +407,77 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     } finally {
       setLoadingClassData(false);
     }
-  }, [activeFicha, instructorUid]);
+  }, [activeFicha?.id, instructorUid, attendanceDate]);
 
   useEffect(() => {
-    if (viewMode === 'detail' && activeFicha) {
+    if (viewMode === 'detail' && activeFicha?.id) {
       loadActiveFichaClassData();
     }
-  }, [viewMode, activeFicha, loadActiveFichaClassData]);
+  }, [viewMode, activeFicha?.id, loadActiveFichaClassData]);
+
+  // PROMPT 29: Guardar Asistencia de la Ficha
+  const handleSaveAttendance = async () => {
+    if (!activeFicha) return;
+    setIsSavingAttendance(true);
+    setAttendanceFeedback(null);
+    try {
+      await Promise.all(
+        classApprentices.map(async (app) => {
+          await trackingService.recordAttendance({
+            fichaId: activeFicha.id,
+            userId: app.uid,
+            learnerId: app.uid,
+            date: attendanceDate,
+            status: attendanceStatuses[app.uid] || 'PRESENTE',
+            observation: attendanceObservations[app.uid] || '',
+            instructorId: instructorUid,
+          });
+        })
+      );
+      setAttendanceFeedback('Planilla de asistencia guardada correctamente en Firestore.');
+      const updated = await trackingService.getAttendance(activeFicha.id, attendanceDate);
+      setClassAttendance(updated.data || []);
+    } catch (err) {
+      console.warn('[InstructorFichasView] Error guardando asistencia:', err);
+      setAttendanceFeedback('Error al guardar asistencia.');
+    } finally {
+      setIsSavingAttendance(false);
+      setTimeout(() => setAttendanceFeedback(null), 4000);
+    }
+  };
+
+  // PROMPT 29: Guardar Observación de Seguimiento de la Ficha
+  const handleSaveTrackingRecord = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeFicha || !newTrackingLearnerId || !newTrackingDescription.trim()) return;
+    setIsSavingTracking(true);
+    try {
+      const now = new Date().toISOString();
+      await trackingService.saveLearnerRecord({
+        id: `rec_${Date.now()}`,
+        fichaId: activeFicha.id,
+        userId: newTrackingLearnerId,
+        type: newTrackingType,
+        category: newTrackingCategory as any,
+        description: newTrackingDescription.trim(),
+        createdBy: instructorUid,
+        date: now.split('T')[0],
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      setIsAddTrackingModalOpen(false);
+      setNewTrackingDescription('');
+      setNewTrackingLearnerId('');
+      const updated = await trackingService.getLearnerRecords(activeFicha.id);
+      setClassTrackingRecords(updated.data || []);
+    } catch (err) {
+      console.warn('[InstructorFichasView] Error guardando seguimiento:', err);
+    } finally {
+      setIsSavingTracking(false);
+    }
+  };
 
   // Guardar nueva Ficha (Sección 6) - Cero dependencia de Cursos
   const handleCreateFichaSubmit = async (e: React.FormEvent) => {
@@ -530,717 +706,1515 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   };
 
   // =========================================================================
-  // VISTA 2: DENTRO DE UNA FICHA (EXPERIENCIA GOOGLE CLASSROOM HUB)
+  // VISTA 2: DENTRO DE UNA FICHA (ESPACIO PROPIO DE LA FICHA - GOOGLE CLASSROOM)
   // =========================================================================
-  if (viewMode === 'detail' && activeFicha) {
-    const stats = fichaStats[activeFicha.id] || {
-      apprenticesCount: classApprentices.length,
-      activitiesCount: classActivities.length,
-      pendingSubmissionsCount: 0,
-    };
-    const center = centers.find((c) => c.id === activeFicha.centerId);
+  if (viewMode === 'detail') {
+    // Si todavía está cargando fichas
+    if (loading && !activeFicha) {
+      return (
+        <div className="py-16 text-center space-y-3 bg-white rounded-2xl border border-slate-200">
+          <RefreshCw className="w-8 h-8 animate-spin text-[#39A900] mx-auto" />
+          <p className="text-sm font-semibold text-slate-700">Cargando ambiente formativo de la Ficha...</p>
+        </div>
+      );
+    }
 
-    return (
-      <div className="space-y-6 animate-in fade-in duration-150">
-        {/* Barra superior de retorno */}
-        <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+    // Si la ficha no fue encontrada en Firestore
+    if (!loading && !activeFicha) {
+      return (
+        <div className="py-16 bg-white rounded-2xl border border-slate-200 p-8 text-center max-w-lg mx-auto space-y-4">
+          <div className="w-14 h-14 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">Ficha no encontrada</h3>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            No se encontró ninguna ficha formativa activa con el identificador "{activeFichaId}".
+          </p>
           <button
-            onClick={() => setViewMode('grid')}
-            className="inline-flex items-center gap-2 text-xs font-bold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer"
+            onClick={() => {
+              setViewMode('grid');
+              setActiveFichaId('');
+              onBackToList?.();
+            }}
+            className="px-4 py-2 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-2 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             ← Volver a Mis Fichas
           </button>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono font-bold text-[#39A900] bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-              FICHA #{activeFicha.number}
-            </span>
-          </div>
         </div>
+      );
+    }
 
-        {/* Banner Institucional de la Clase (Estilo Google Classroom) */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#00324D] via-[#004A73] to-[#005B8C] text-white p-6 sm:p-8 shadow-sm border border-slate-700">
-          <div className="relative z-10 space-y-3 max-w-3xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-sm font-black tracking-wider bg-white/15 text-[#8CE665] px-3 py-0.5 rounded-md border border-white/20">
-                FICHA {activeFicha.number}
-              </span>
-              <span
-                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
-                  shiftLabels[activeFicha.shift]?.badge || 'bg-slate-100 text-slate-800'
-                }`}
-              >
-                Jornada: {shiftLabels[activeFicha.shift]?.label || activeFicha.shift}
-              </span>
-              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-white/10 text-white border border-white/20">
-                {activeFicha.stage === 'lectiva' ? 'Etapa Lectiva' : activeFicha.stage}
+    // PROMPT 29: Validación de seguridad institucional (Sección 27)
+    if (activeFicha && !isAuthorizedInstructor) {
+      return (
+        <div className="py-16 bg-white rounded-2xl border border-rose-200 p-8 text-center max-w-lg mx-auto space-y-4">
+          <div className="w-14 h-14 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">Acceso No Autorizado a esta Ficha</h3>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            No estás asignado como instructor autorizado para la Ficha #{activeFicha.number} (
+            {activeFicha.name || activeFicha.programName}). Por seguridad institucional del SENA,
+            solo los instructores formalmente vinculados pueden gestionar esta clase.
+          </p>
+          <button
+            onClick={() => {
+              setViewMode('grid');
+              setActiveFichaId('');
+              onBackToList?.();
+            }}
+            className="px-4 py-2 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-2 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            ← Volver a Mis Fichas
+          </button>
+        </div>
+      );
+    }
+
+    if (activeFicha) {
+      const stats = fichaStats[activeFicha.id] || {
+        apprenticesCount: classApprentices.length,
+        activitiesCount: classActivities.length,
+        pendingSubmissionsCount: classSubmissions.filter(
+          (s) => s.status === 'submitted' || s.status === 'under_review' || !s.grade
+        ).length,
+      };
+      const center = centers.find((c) => c.id === activeFicha.centerId);
+
+      // Métricas de asistencia
+      const presentCount = Object.values(attendanceStatuses).filter((s) => s === 'PRESENTE').length;
+      const absentCount = Object.values(attendanceStatuses).filter((s) => s === 'AUSENTE').length;
+      const lateCount = Object.values(attendanceStatuses).filter((s) => s === 'TARDE').length;
+      const excusedCount = Object.values(attendanceStatuses).filter((s) => s === 'EXCUSADO').length;
+      const totalSessionApps = classApprentices.length;
+      const attRate =
+        totalSessionApps > 0 ? Math.round(((presentCount + lateCount * 0.8 + excusedCount) / totalSessionApps) * 100) : 100;
+
+      // Métricas de calificaciones
+      const gradedCount = classSubmissions.filter((s) => Boolean(s.grade)).length;
+      const approvedCount = classSubmissions.filter((s) => s.grade === 'A').length;
+      const unapprovedCount = classSubmissions.filter((s) => s.grade === 'N' || s.grade === 'C').length;
+      const passingRate = gradedCount > 0 ? Math.round((approvedCount / gradedCount) * 100) : 100;
+
+      // Filtrado de aprendices
+      const filteredApprentices = classApprentices.filter((app) => {
+        const term = apprenticeSearchTerm.toLowerCase().trim();
+        const matchesTerm =
+          !term ||
+          app.displayName.toLowerCase().includes(term) ||
+          app.email.toLowerCase().includes(term) ||
+          (app.documentNumber && app.documentNumber.includes(term));
+
+        if (!matchesTerm) return false;
+        if (apprenticeStatusFilter === 'active') return app.enrollmentStatus !== 'withdrawn';
+        if (apprenticeStatusFilter === 'withdrawn') return app.enrollmentStatus === 'withdrawn';
+        return true;
+      });
+
+      // Filtrado de evidencias
+      const filteredSubmissions = classSubmissions.filter((sub) => {
+        if (submissionFilterStatus === 'pending') {
+          return sub.status === 'submitted' || sub.status === 'under_review' || !sub.grade;
+        }
+        if (submissionFilterStatus === 'graded') {
+          return Boolean(sub.grade);
+        }
+        return true;
+      });
+
+      return (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Barra superior de retorno - PROMPT 29 Sección 24 */}
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+            <button
+              onClick={() => {
+                setViewMode('grid');
+                setActiveFichaId('');
+                onBackToList?.();
+              }}
+              className="inline-flex items-center gap-2 text-xs font-bold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              ← Volver a Mis Fichas
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-[#39A900] bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                FICHA #{activeFicha.number}
               </span>
             </div>
+          </div>
 
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              {activeFicha.name || activeFicha.programName || `Ficha ${activeFicha.number}`}
-            </h1>
+          {/* Banner Institucional de la Ficha (PROMPT 29 Sección 6) */}
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#00324D] via-[#004A73] to-[#005B8C] text-white p-6 sm:p-8 shadow-sm border border-slate-700">
+            <div className="relative z-10 space-y-3 max-w-3xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm font-black tracking-wider bg-white/15 text-[#8CE665] px-3 py-0.5 rounded-md border border-white/20">
+                  FICHA {activeFicha.number}
+                </span>
+                <span
+                  className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    shiftLabels[activeFicha.shift]?.badge || 'bg-slate-100 text-slate-800'
+                  }`}
+                >
+                  Jornada: {shiftLabels[activeFicha.shift]?.label || activeFicha.shift}
+                </span>
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-white/10 text-white border border-white/20">
+                  {activeFicha.stage === 'lectiva' ? 'Etapa Lectiva' : activeFicha.stage}
+                </span>
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-[#8CE665] border border-emerald-500/30">
+                  {activeFicha.status === 'active' ? 'Activa / En Formación' : activeFicha.status}
+                </span>
+              </div>
 
-            <p className="text-xs text-slate-200 flex items-center gap-1.5">
-              <Building2 className="w-4 h-4 text-[#8CE665]" />
-              {center?.name || 'Centro de Comercio y Servicios'} · {center?.city || 'Ibagué'}, {center?.department || 'Tolima'}
-            </p>
+              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                {activeFicha.name || activeFicha.programName || `Ficha ${activeFicha.number}`}
+              </h1>
 
-            {activeFicha.description && (
-              <p className="text-xs text-slate-300 italic pt-1 line-clamp-2">
-                "{activeFicha.description}"
+              <p className="text-xs text-slate-200 flex items-center gap-1.5">
+                <Building2 className="w-4 h-4 text-[#8CE665]" />
+                {center?.name || 'Centro de Comercio y Servicios'} · {center?.city || 'Ibagué'},{' '}
+                {center?.department || 'Tolima'}
               </p>
-            )}
 
-            {/* Acciones Rápidas del Instructor en la Clase */}
-            <div className="pt-3 flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setIsAddLearnerModalOpen(true)}
-                className="px-3.5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                + Agregar aprendiz
-              </button>
-              <button
-                onClick={() => setIsActivityModalOpen(true)}
-                className="px-3.5 py-2 bg-white text-[#00324D] hover:bg-slate-100 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-              >
-                <Plus className="w-4 h-4 text-[#39A900]" />
-                + Nueva actividad
-              </button>
-              <button
-                onClick={() => setIsResourceModalOpen(true)}
-                className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer"
-              >
-                <FolderArchive className="w-4 h-4 text-[#8CE665]" />
-                + Compartir recurso
-              </button>
-              <button
-                onClick={() => {
-                  setEditFichaName(activeFicha.name || '');
-                  setEditFichaNumber(activeFicha.number || '');
-                  setEditProgramName(activeFicha.programName || '');
-                  setEditShift(activeFicha.shift || 'morning');
-                  setEditStage(activeFicha.stage || 'lectiva');
-                  setEditDescription(activeFicha.description || '');
-                  setIsEditFichaModalOpen(true);
-                }}
-                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer ml-auto"
-                title="Editar información de la Ficha"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                Editar
-              </button>
+              {activeFicha.description && (
+                <p className="text-xs text-slate-300 italic pt-1 line-clamp-2">"{activeFicha.description}"</p>
+              )}
 
-              <button
-                onClick={() => openDeleteFichaModal(activeFicha)}
-                className="px-3 py-2 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-400/40 flex items-center gap-1.5 cursor-pointer"
-                title="Eliminar esta ficha de formación"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-300" />
-                Eliminar ficha
-              </button>
+              {/* Acciones Rápidas del Instructor en la Ficha */}
+              <div className="pt-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setIsAddLearnerModalOpen(true)}
+                  className="px-3.5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  + Agregar aprendiz
+                </button>
+                <button
+                  onClick={() => setIsActivityModalOpen(true)}
+                  className="px-3.5 py-2 bg-white text-[#00324D] hover:bg-slate-100 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 text-[#39A900]" />
+                  + Nueva actividad
+                </button>
+                <button
+                  onClick={() => {
+                    setEditFichaName(activeFicha.name || '');
+                    setEditFichaNumber(activeFicha.number || '');
+                    setEditProgramName(activeFicha.programName || '');
+                    setEditShift(activeFicha.shift || 'morning');
+                    setEditStage(activeFicha.stage || 'lectiva');
+                    setEditDescription(activeFicha.description || '');
+                    setIsEditFichaModalOpen(true);
+                  }}
+                  className="px-3 py-2 bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer ml-auto"
+                  title="Editar información de la Ficha"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Editar
+                </button>
+
+                <button
+                  onClick={() => openDeleteFichaModal(activeFicha)}
+                  className="px-3 py-2 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-400/40 flex items-center gap-1.5 cursor-pointer"
+                  title="Eliminar esta ficha de formación"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-300" />
+                  Eliminar ficha
+                </button>
+              </div>
             </div>
+            <div className="absolute -right-8 -bottom-8 w-60 h-60 rounded-full bg-[#39A900]/15 blur-2xl pointer-events-none" />
           </div>
-          <div className="absolute -right-8 -bottom-8 w-60 h-60 rounded-full bg-[#39A900]/15 blur-2xl pointer-events-none" />
-        </div>
 
-        {/* Pestañas de Navegación de la Clase (Estilo Google Classroom) */}
-        <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-1 scrollbar-thin">
-          <button
-            onClick={() => setActiveClassTab('activities')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'activities'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <FileText className="w-4 h-4" />
-            Trabajo de Clase ({classActivities.length})
-          </button>
-          <button
-            onClick={() => setActiveClassTab('people')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'people'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            Personas / Aprendices ({classApprentices.length})
-          </button>
-          <button
-            onClick={() => setActiveClassTab('announcements')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'announcements'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <Megaphone className="w-4 h-4" />
-            Novedades y Muro ({classAnnouncements.length})
-          </button>
-          <button
-            onClick={() => setActiveClassTab('submissions')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'submissions'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <FolderArchive className="w-4 h-4" />
-            Evidencias y Calificaciones ({classSubmissions.length})
-          </button>
-          <button
-            onClick={() => setActiveClassTab('resources')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'resources'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <BookOpen className="w-4 h-4" />
-            Recursos y Materiales ({classResources.length})
-          </button>
-          <button
-            onClick={() => setActiveClassTab('competencies')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-              activeClassTab === 'competencies'
-                ? 'bg-[#00324D] text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <Target className="w-4 h-4" />
-            Competencias y RAPs ({classCompetencies.length})
-          </button>
-        </div>
-
-        {/* Contenido de la pestaña activa */}
-        {loadingClassData ? (
-          <div className="py-16 text-center space-y-2 bg-white rounded-xl border border-slate-200">
-            <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
-            <p className="text-xs text-slate-500 font-semibold">Cargando datos de la ficha...</p>
+          {/* Pestañas de Navegación Interna de la Ficha (PROMPT 29 Sección 7) */}
+          <div className="flex items-center gap-1.5 border-b border-slate-200 overflow-x-auto pb-1 scrollbar-thin">
+            <button
+              onClick={() => setActiveClassTab('summary')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'summary'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Resumen
+            </button>
+            <button
+              onClick={() => setActiveClassTab('activities')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'activities'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              Actividades ({classActivities.length})
+            </button>
+            <button
+              onClick={() => setActiveClassTab('apprentices')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'apprentices'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              Aprendices ({classApprentices.length})
+            </button>
+            <button
+              onClick={() => setActiveClassTab('submissions')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'submissions'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <FolderArchive className="w-4 h-4" />
+              Evidencias ({classSubmissions.length})
+            </button>
+            <button
+              onClick={() => setActiveClassTab('grades')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'grades'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Award className="w-4 h-4" />
+              Calificaciones
+            </button>
+            <button
+              onClick={() => setActiveClassTab('attendance')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'attendance'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <CalendarCheck className="w-4 h-4" />
+              Asistencia
+            </button>
+            <button
+              onClick={() => setActiveClassTab('tracking')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'tracking'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4" />
+              Seguimiento
+            </button>
+            <button
+              onClick={() => setActiveClassTab('announcements')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'announcements'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Megaphone className="w-4 h-4" />
+              Anuncios ({classAnnouncements.length})
+            </button>
           </div>
-        ) : (
-          <>
-            {/* PESTAÑA: TRABAJO DE CLASE / ACTIVIDADES */}
-            {activeClassTab === 'activities' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                  <div>
-                    <h3 className="text-sm font-bold text-[#00324D]">Actividades Formativas de la Ficha</h3>
-                    <p className="text-xs text-slate-500">Tareas creadas directamente para la Ficha #{activeFicha.number}</p>
-                  </div>
-                  <button
-                    onClick={() => setIsActivityModalOpen(true)}
-                    className="px-3 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    + Nueva actividad
-                  </button>
-                </div>
 
-                {classActivities.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center space-y-3">
-                    <FileText className="w-12 h-12 text-slate-300 mx-auto" />
-                    <h4 className="text-sm font-bold text-slate-800">No hay actividades creadas en esta ficha</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Crea tu primera actividad pedagógica directamente para este grupo de aprendices.
-                    </p>
-                    <button
-                      onClick={() => setIsActivityModalOpen(true)}
-                      className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+          {/* Contenido de la pestaña activa */}
+          {loadingClassData ? (
+            <div className="py-16 text-center space-y-2 bg-white rounded-xl border border-slate-200">
+              <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
+              <p className="text-xs text-slate-500 font-semibold">Cargando datos reales de la ficha desde Firestore...</p>
+            </div>
+          ) : (
+            <>
+              {/* ========================================================= */}
+              {/* PESTAÑA 1: RESUMEN (PROMPT 29 Sección 8) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'summary' && (
+                <div className="space-y-6">
+                  {/* Tarjetas de Métricas Reales de Firestore */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div
+                      onClick={() => setActiveClassTab('apprentices')}
+                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
                     >
-                      <Plus className="w-4 h-4" />
-                      Crear primera actividad
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {classActivities.map((act) => {
-                      const subs = classSubmissions.filter((s) => s.activityId === act.id);
-                      const rap = classLearningOutcomes.find((r) => r.id === act.learningOutcomeId);
+                      <div className="flex items-center justify-between pb-2">
+                        <span className="text-xs font-semibold text-slate-500">Aprendices Matriculados</span>
+                        <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#39A900] flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <Users className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black font-mono text-[#00324D]">{classApprentices.length}</div>
+                      <p className="text-[11px] text-slate-400 mt-1">Con expediente institucional</p>
+                    </div>
 
-                      return (
-                        <div
-                          key={act.id}
-                          className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs hover:border-[#39A900] transition-all flex flex-col justify-between space-y-3"
+                    <div
+                      onClick={() => setActiveClassTab('activities')}
+                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center justify-between pb-2">
+                        <span className="text-xs font-semibold text-slate-500">Actividades Formativas</span>
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 text-[#00324D] flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black font-mono text-[#00324D]">{classActivities.length}</div>
+                      <p className="text-[11px] text-slate-400 mt-1">Tareas y evidencias vigentes</p>
+                    </div>
+
+                    <div
+                      onClick={() => setActiveClassTab('submissions')}
+                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center justify-between pb-2">
+                        <span className="text-xs font-semibold text-slate-500">Evidencias Recibidas</span>
+                        <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <FolderArchive className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black font-mono text-[#00324D]">{classSubmissions.length}</div>
+                      <p className="text-[11px] text-slate-400 mt-1">Subidas vía Drive o archivo</p>
+                    </div>
+
+                    <div
+                      onClick={() => setActiveClassTab('submissions')}
+                      className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-2xs hover:border-amber-400 transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center justify-between pb-2">
+                        <span className="text-xs font-semibold text-amber-800">Pendientes por Calificar</span>
+                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <Clock className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black font-mono text-amber-900">{stats.pendingSubmissionsCount}</div>
+                      <p className="text-[11px] text-amber-700 mt-1">Requieren dictamen A/D/C</p>
+                    </div>
+                  </div>
+
+                  {/* Ficha Técnica Académica (Datos Reales de la Ficha) */}
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#00324D]">Ficha Técnica del Ambiente Formativo</h3>
+                        <p className="text-xs text-slate-500">Parámetros registrados en el Sistema Nacional de Aprendizaje</p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-[#00324D] bg-slate-100 px-3 py-1 rounded-lg">
+                        ID: {activeFicha.id}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Nombre de la Ficha:</span>
+                        <span className="font-bold text-slate-900 text-sm">{activeFicha.name || activeFicha.programName}</span>
+                      </div>
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Número Oficial de Ficha:</span>
+                        <span className="font-mono font-bold text-[#00324D] text-sm">#{activeFicha.number}</span>
+                      </div>
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Centro de Formación:</span>
+                        <span className="font-bold text-slate-900">{center?.name || 'Centro de Comercio y Servicios'}</span>
+                      </div>
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Jornada Formativa:</span>
+                        <span className="font-bold text-slate-900">{shiftLabels[activeFicha.shift]?.label || activeFicha.shift}</span>
+                      </div>
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Fecha de Apertura / Inicio:</span>
+                        <span className="font-bold text-slate-900">
+                          {activeFicha.startDate ? new Date(activeFicha.startDate).toLocaleDateString('es-CO') : 'No fijada'}
+                        </span>
+                      </div>
+                      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
+                        <span className="text-slate-500 block font-medium">Fecha de Finalización:</span>
+                        <span className="font-bold text-slate-900">
+                          {activeFicha.endDate ? new Date(activeFicha.endDate).toLocaleDateString('es-CO') : 'No fijada'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Panel de Actividades Recientes y Accesos Rápidos */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Actividades recientes */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-[#39A900]" />
+                          <h4 className="text-xs font-bold text-[#00324D]">Actividades Pedagógicas Recientes</h4>
+                        </div>
+                        <button
+                          onClick={() => setActiveClassTab('activities')}
+                          className="text-xs font-bold text-[#2E8500] hover:underline cursor-pointer"
                         >
-                          <div className="space-y-2">
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-                                {act.submissionType || 'Evidencia'}
-                              </span>
-                              <span className="text-[11px] font-bold text-[#00324D] bg-[#EBF8E7] px-2 py-0.5 rounded">
-                                {subs.length} {subs.length === 1 ? 'entrega' : 'entregas'}
+                          Ver todas ({classActivities.length})
+                        </button>
+                      </div>
+
+                      {classActivities.length === 0 ? (
+                        <div className="py-8 text-center space-y-2">
+                          <p className="text-xs text-slate-500">No hay actividades creadas en esta ficha aún.</p>
+                          <button
+                            onClick={() => setIsActivityModalOpen(true)}
+                            className="px-3.5 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            + Agregar primera actividad
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {classActivities.slice(0, 3).map((act) => (
+                            <div
+                              key={act.id}
+                              className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 flex items-center justify-between gap-2"
+                            >
+                              <div className="truncate">
+                                <h5 className="text-xs font-bold text-slate-900 truncate">{act.title}</h5>
+                                <span className="text-[10px] text-slate-500">
+                                  Límite:{' '}
+                                  {act.dueDate ? new Date(act.dueDate).toLocaleDateString('es-CO') : 'Sin fecha'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-bold text-[#00324D] bg-white px-2 py-0.5 rounded border border-slate-200 shrink-0">
+                                {classSubmissions.filter((s) => s.activityId === act.id).length} entregas
                               </span>
                             </div>
-                            <h4 className="text-base font-bold text-slate-900 leading-snug">{act.title}</h4>
-                            <p className="text-xs text-slate-600 line-clamp-2">{act.instructions || act.description}</p>
-                            {rap && (
-                              <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                                <strong className="text-slate-700 block">RAP:</strong>
-                                <span className="line-clamp-1">{rap.description}</span>
-                              </div>
-                            )}
-                            {act.dueDate && (
-                              <div className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1">
-                                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                                <span>Fecha límite: <strong>{new Date(act.dueDate).toLocaleDateString('es-CO')}</strong></span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                            <span className="text-[11px] text-slate-500 font-mono">
-                              {act.rubricId ? 'Con Rúbrica Pedagógica' : 'Sin rúbrica'}
-                            </span>
-                            <button
-                              onClick={() => {
-                                onNavigateToActivities?.(activeFicha.number);
-                              }}
-                              className="text-xs font-bold text-[#2E8500] hover:underline inline-flex items-center gap-1 cursor-pointer"
-                            >
-                              <span>Ver entregas</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          ))}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+                      )}
+                    </div>
 
-            {/* PESTAÑA: PERSONAS / APRENDICES */}
-            {activeClassTab === 'people' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                  <div>
-                    <h3 className="text-sm font-bold text-[#00324D]">
-                      Aprendices Matriculados ({classApprentices.length})
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Asignados a la Ficha #{activeFicha.number} mediante correo institucional o Gmail
-                    </p>
+                    {/* Muro rápido de avisos */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <Megaphone className="w-4 h-4 text-[#00324D]" />
+                          <h4 className="text-xs font-bold text-[#00324D]">Últimos Avisos del Muro</h4>
+                        </div>
+                        <button
+                          onClick={() => setActiveClassTab('announcements')}
+                          className="text-xs font-bold text-[#2E8500] hover:underline cursor-pointer"
+                        >
+                          Ver muro completo
+                        </button>
+                      </div>
+
+                      {classAnnouncements.length === 0 ? (
+                        <div className="py-8 text-center space-y-2">
+                          <p className="text-xs text-slate-500">No hay avisos publicados en el muro.</p>
+                          <button
+                            onClick={() => setActiveClassTab('announcements')}
+                            className="px-3.5 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Megaphone className="w-3.5 h-3.5" />
+                            Publicar un aviso
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {classAnnouncements.slice(0, 2).map((ann) => (
+                            <div
+                              key={ann.id}
+                              className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1"
+                            >
+                              <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                <span className="font-bold text-[#00324D]">{ann.creatorName || 'Instructor'}</span>
+                                <span>{new Date(ann.publishedAt || ann.createdAt).toLocaleDateString('es-CO')}</span>
+                              </div>
+                              <h5 className="text-xs font-bold text-slate-900 truncate">{ann.title}</h5>
+                              <p className="text-[11px] text-slate-600 line-clamp-1">{ann.message}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setIsAddLearnerModalOpen(true)}
-                    className="px-3.5 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <UserPlus className="w-3.5 h-3.5" />
-                    + Agregar aprendiz
-                  </button>
                 </div>
+              )}
 
-                {classApprentices.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center space-y-3">
-                    <Users className="w-12 h-12 text-slate-300 mx-auto" />
-                    <h4 className="text-sm font-bold text-slate-800">No hay aprendices agregados a esta ficha</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Registra los correos Gmail de tus aprendices para autorizar su ingreso a esta ficha formativa.
-                    </p>
+              {/* ========================================================= */}
+              {/* PESTAÑA 2: ACTIVIDADES (PROMPT 29 Secciones 9-14) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'activities' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Actividades de Ficha #{activeFicha.number} — {activeFicha.name || activeFicha.programName}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Tareas y evidencias formativas creadas exclusivamente para este grupo
+                      </p>
+                    </div>
+                    {/* PROMPT 29 Sección 10: Botón + Agregar actividad */}
                     <button
-                      onClick={() => setIsAddLearnerModalOpen(true)}
-                      className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => setIsActivityModalOpen(true)}
+                      className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer shrink-0"
                     >
-                      <UserPlus className="w-4 h-4" />
-                      Agregar primer aprendiz
+                      <Plus className="w-4 h-4" />
+                      <span>+ Agregar actividad</span>
                     </button>
                   </div>
-                ) : (
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-[#00324D] text-white border-b border-slate-700">
-                          <th className="p-3 font-bold">Aprendiz</th>
-                          <th className="p-3 font-bold">Correo Registrado</th>
-                          <th className="p-3 font-bold">Fecha Asignación</th>
-                          <th className="p-3 font-bold text-center">Estado</th>
-                          <th className="p-3 font-bold text-right">Acción</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {classApprentices.map((apprentice) => {
-                          const isPending =
-                            apprentice.status === 'pending' || apprentice.enrollmentStatus === 'pending';
 
-                          return (
-                            <tr key={apprentice.uid} className="hover:bg-slate-50/80 transition-colors">
-                              <td className="p-3">
-                                <div className="flex items-center gap-2.5">
-                                  <img
-                                    src={apprentice.photoURL}
-                                    alt={apprentice.displayName}
-                                    className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-200"
-                                  />
-                                  <div>
-                                    <div className="font-bold text-slate-900">{apprentice.displayName}</div>
-                                    <span className="text-[10px] text-slate-400 font-mono">
-                                      {apprentice.documentNumber !== 'No registrado' ? `CC ${apprentice.documentNumber}` : 'Sin CC'}
-                                    </span>
-                                  </div>
+                  {/* PROMPT 29 Sección 14: Estado Vacío si 0 actividades */}
+                  {classActivities.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center space-y-3">
+                      <FileText className="w-12 h-12 text-slate-300 mx-auto" />
+                      <h4 className="text-base font-bold text-slate-800">No hay actividades en esta ficha.</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        Crea la primera actividad para comenzar.
+                      </p>
+                      <button
+                        onClick={() => setIsActivityModalOpen(true)}
+                        className="px-5 py-2.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-2 cursor-pointer mt-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>+ Agregar actividad</span>
+                      </button>
+                    </div>
+                  ) : (
+                    /* PROMPT 29 Sección 13: Listado de Actividades filtradas por Ficha */
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {classActivities.map((act) => {
+                        const subs = classSubmissions.filter((s) => s.activityId === act.id);
+                        const rap = classLearningOutcomes.find((r) => r.id === act.learningOutcomeId);
+
+                        return (
+                          <div
+                            key={act.id}
+                            className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs hover:border-[#39A900] transition-all flex flex-col justify-between space-y-3"
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                                  {act.submissionType || 'Evidencia'}
+                                </span>
+                                <span className="text-[11px] font-bold text-[#00324D] bg-[#EBF8E7] px-2 py-0.5 rounded">
+                                  {subs.length} {subs.length === 1 ? 'entrega' : 'entregas'}
+                                </span>
+                              </div>
+                              <h4 className="text-base font-bold text-slate-900 leading-snug">{act.title}</h4>
+                              <p className="text-xs text-slate-600 line-clamp-2">{act.instructions || act.description}</p>
+                              {rap && (
+                                <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                  <strong className="text-slate-700 block">RAP:</strong>
+                                  <span className="line-clamp-1">{rap.description}</span>
                                 </div>
+                              )}
+                              {act.dueDate && (
+                                <div className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1">
+                                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>
+                                    Fecha límite:{' '}
+                                    <strong>{new Date(act.dueDate).toLocaleDateString('es-CO')}</strong>
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                              <span className="text-[11px] text-slate-500 font-mono">
+                                {act.rubricId ? 'Con Rúbrica Pedagógica' : 'Sin rúbrica'}
+                              </span>
+                              {/* PROMPT 29 Sección 23: Permanecer dentro de la ficha */}
+                              <button
+                                onClick={() => setActiveClassTab('submissions')}
+                                className="text-xs font-bold text-[#2E8500] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <span>Ver entregas</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PESTAÑA 3: APRENDICES (PROMPT 29 Sección 16) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'apprentices' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Aprendices Matriculados ({classApprentices.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Vinculados formalmente a la Ficha #{activeFicha.number}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddLearnerModalOpen(true)}
+                      className="px-3.5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      + Agregar aprendiz
+                    </button>
+                  </div>
+
+                  {/* Filtros de Aprendices */}
+                  <div className="flex flex-col sm:flex-row items-center gap-3 bg-white p-3 rounded-xl border border-slate-200">
+                    <div className="relative flex-1 w-full">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Buscar por nombre, correo o cédula..."
+                        value={apprenticeSearchTerm}
+                        onChange={(e) => setApprenticeSearchTerm(e.target.value)}
+                        className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900]"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                      <button
+                        onClick={() => setApprenticeStatusFilter('all')}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          apprenticeStatusFilter === 'all'
+                            ? 'bg-[#00324D] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Todos ({classApprentices.length})
+                      </button>
+                      <button
+                        onClick={() => setApprenticeStatusFilter('active')}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          apprenticeStatusFilter === 'active'
+                            ? 'bg-[#00324D] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Activos ({classApprentices.filter((a) => a.enrollmentStatus !== 'withdrawn').length})
+                      </button>
+                      <button
+                        onClick={() => setApprenticeStatusFilter('withdrawn')}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          apprenticeStatusFilter === 'withdrawn'
+                            ? 'bg-[#00324D] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Retirados ({classApprentices.filter((a) => a.enrollmentStatus === 'withdrawn').length})
+                      </button>
+                    </div>
+                  </div>
+
+                  {filteredApprentices.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-3">
+                      <Users className="w-12 h-12 text-slate-300 mx-auto" />
+                      <h4 className="text-sm font-bold text-slate-800">No se encontraron aprendices</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        Registra los correos de tus aprendices para autorizar su ingreso a esta ficha formativa.
+                      </p>
+                      <button
+                        onClick={() => setIsAddLearnerModalOpen(true)}
+                        className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        Agregar primer aprendiz
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
+                            <th className="p-3 font-bold">Aprendiz</th>
+                            <th className="p-3 font-bold">Correo Registrado</th>
+                            <th className="p-3 font-bold">Fecha Asignación</th>
+                            <th className="p-3 font-bold text-center">Estado</th>
+                            <th className="p-3 font-bold text-right">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {filteredApprentices.map((apprentice) => {
+                            const isPending =
+                              apprentice.status === 'pending' || apprentice.enrollmentStatus === 'pending';
+
+                            return (
+                              <tr key={apprentice.uid} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="p-3">
+                                  <div className="flex items-center gap-2.5">
+                                    <img
+                                      src={apprentice.photoURL}
+                                      alt={apprentice.displayName}
+                                      className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-200"
+                                    />
+                                    <div>
+                                      <div className="font-bold text-slate-900">{apprentice.displayName}</div>
+                                      <span className="text-[10px] text-slate-400 font-mono">
+                                        {apprentice.documentNumber !== 'No registrado'
+                                          ? `CC ${apprentice.documentNumber}`
+                                          : 'Sin CC'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="p-3 font-mono text-slate-700">{apprentice.email}</td>
+                                <td className="p-3 text-slate-500">
+                                  {apprentice.assignedAt
+                                    ? new Date(apprentice.assignedAt).toLocaleDateString('es-CO')
+                                    : '—'}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {apprentice.enrollmentStatus === 'withdrawn' ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                      Retirado
+                                    </span>
+                                  ) : isPending ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                      <Clock className="w-3 h-3 text-amber-600" />
+                                      Pendiente login
+                                    </span>
+                                  ) : (
+                                    <StatusBadge status={apprentice.status} size="sm" />
+                                  )}
+                                </td>
+                                <td className="p-3 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      onClick={() => setSelectedApprenticeProfile(apprentice)}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded-lg font-bold transition-colors inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                      title="Ver Expediente Académico"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      Expediente
+                                    </button>
+                                    {apprentice.enrollmentStatus !== 'withdrawn' && (
+                                      <button
+                                        onClick={() => openRemoveLearnerModal(apprentice)}
+                                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer text-[11px]"
+                                        title="Quitar aprendiz de esta ficha"
+                                      >
+                                        <UserMinus className="w-3.5 h-3.5" />
+                                        Quitar
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PESTAÑA 4: EVIDENCIAS (PROMPT 29 Sección 18) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'submissions' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Evidencias de la Ficha #{activeFicha.number} ({classSubmissions.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Entregas asociadas únicamente a actividades de esta ficha
+                      </p>
+                    </div>
+                    {/* Filtros de Estado de Evidencia */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setSubmissionFilterStatus('all')}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          submissionFilterStatus === 'all'
+                            ? 'bg-[#00324D] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        Todas ({classSubmissions.length})
+                      </button>
+                      <button
+                        onClick={() => setSubmissionFilterStatus('pending')}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          submissionFilterStatus === 'pending'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                        }`}
+                      >
+                        Por calificar ({stats.pendingSubmissionsCount})
+                      </button>
+                      <button
+                        onClick={() => setSubmissionFilterStatus('graded')}
+                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                          submissionFilterStatus === 'graded'
+                            ? 'bg-[#39A900] text-white'
+                            : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        }`}
+                      >
+                        Calificadas ({gradedCount})
+                      </button>
+                    </div>
+                  </div>
+
+                  {filteredSubmissions.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-2">
+                      <FolderArchive className="w-10 h-10 text-slate-300 mx-auto" />
+                      <h4 className="text-sm font-bold text-slate-700">No hay evidencias registradas en este filtro</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        Cuando los aprendices envíen sus evidencias pedagógicas, aparecerán listadas aquí para su evaluación.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
+                            <th className="p-3 font-bold">Aprendiz</th>
+                            <th className="p-3 font-bold">Actividad</th>
+                            <th className="p-3 font-bold">Fecha Envío</th>
+                            <th className="p-3 font-bold text-center">Estado</th>
+                            <th className="p-3 font-bold text-center">Dictamen</th>
+                            <th className="p-3 font-bold text-right">Archivos / Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {filteredSubmissions.map((sub) => (
+                            <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="p-3 font-bold text-slate-900">
+                                {sub.learnerName || sub.learnerEmail || 'Aprendiz'}
                               </td>
-                              <td className="p-3 font-mono text-slate-700">{apprentice.email}</td>
+                              <td className="p-3 text-slate-800">{sub.activityTitle || 'Actividad Formativa'}</td>
                               <td className="p-3 text-slate-500">
-                                {apprentice.assignedAt ? new Date(apprentice.assignedAt).toLocaleDateString('es-CO') : '—'}
+                                {new Date(sub.submittedAt).toLocaleDateString('es-CO')}
                               </td>
                               <td className="p-3 text-center">
-                                {apprentice.enrollmentStatus === 'withdrawn' ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                                    Retirado
-                                  </span>
-                                ) : isPending ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                    <Clock className="w-3 h-3 text-amber-600" />
-                                    Pendiente primer login
+                                <StatusBadge status={sub.status as any} size="sm" />
+                              </td>
+                              <td className="p-3 text-center">
+                                {sub.grade ? (
+                                  <span
+                                    className={`font-mono font-black px-2.5 py-0.5 rounded text-xs ${
+                                      sub.grade === 'A'
+                                        ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/30'
+                                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                    }`}
+                                  >
+                                    {sub.grade}
                                   </span>
                                 ) : (
-                                  <StatusBadge status={apprentice.status} size="sm" />
+                                  <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                    Pendiente
+                                  </span>
                                 )}
                               </td>
                               <td className="p-3 text-right">
-                                <div className="flex items-center justify-end gap-1.5">
+                                <div className="flex items-center justify-end gap-2">
+                                  {sub.driveFileUrl && (
+                                    <a
+                                      href={sub.driveFileUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] inline-flex items-center gap-1"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                      Drive
+                                    </a>
+                                  )}
+                                  <span className="text-[11px] font-bold text-slate-400">
+                                    {sub.grade ? 'Calificada' : 'Por evaluar'}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PESTAÑA 5: CALIFICACIONES (PROMPT 29 Sección 19) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'grades' && (
+                <div className="space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Consolidado de Calificaciones — Ficha #{activeFicha.number}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Resultados pedagógicos A / D / C evaluados con rúbricas institucionales
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Tarjetas de Resumen de Calificaciones */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                      <span className="text-xs text-slate-500 block">Evaluaciones Totales</span>
+                      <span className="text-xl font-bold font-mono text-[#00324D] mt-1 block">
+                        {classSubmissions.length}
+                      </span>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                      <span className="text-xs text-[#2E8500] font-bold block">Aprobadas (A)</span>
+                      <span className="text-xl font-bold font-mono text-[#2E8500] mt-1 block">{approvedCount}</span>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                      <span className="text-xs text-rose-700 font-bold block">No Aprobadas / Deficientes (D/C)</span>
+                      <span className="text-xl font-bold font-mono text-rose-700 mt-1 block">
+                        {unapprovedCount}
+                      </span>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                      <span className="text-xs text-slate-500 block">Tasa de Aprobación</span>
+                      <span className="text-xl font-bold font-mono text-[#00324D] mt-1 block">{passingRate}%</span>
+                    </div>
+                  </div>
+
+                  {/* Tabla Consolidada por Aprendiz */}
+                  {classApprentices.length === 0 ? (
+                    <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+                      No hay aprendices registrados en esta ficha para tabular calificaciones.
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
+                            <th className="p-3 font-bold">Aprendiz</th>
+                            <th className="p-3 font-bold text-center">Entregas</th>
+                            <th className="p-3 font-bold text-center">Aprobadas (A)</th>
+                            <th className="p-3 font-bold text-center">Por Mejorar (D/C)</th>
+                            <th className="p-3 font-bold text-center">Cumplimiento</th>
+                            <th className="p-3 font-bold text-right">Detalle</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {classApprentices.map((app) => {
+                            const appSubs = classSubmissions.filter(
+                              (s) => s.learnerId === app.uid || s.learnerEmail === app.email
+                            );
+                            const appA = appSubs.filter((s) => s.grade === 'A').length;
+                            const appDef = appSubs.filter((s) => s.grade === 'N' || s.grade === 'C').length;
+                            const totalActs = classActivities.length;
+                            const pct = totalActs > 0 ? Math.round((appSubs.length / totalActs) * 100) : 0;
+
+                            return (
+                              <tr key={app.uid} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="p-3">
+                                  <div className="font-bold text-slate-900">{app.displayName}</div>
+                                  <span className="text-[10px] text-slate-400 font-mono">{app.email}</span>
+                                </td>
+                                <td className="p-3 text-center font-mono font-bold text-[#00324D]">
+                                  {appSubs.length} / {totalActs}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className="px-2 py-0.5 rounded font-mono font-bold text-xs bg-[#EBF8E7] text-[#2E8500]">
+                                    {appA}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className="px-2 py-0.5 rounded font-mono font-bold text-xs bg-slate-100 text-slate-700">
+                                    {appDef}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <div className="w-24 mx-auto bg-slate-100 rounded-full h-2 overflow-hidden">
+                                    <div
+                                      className="bg-[#39A900] h-full rounded-full transition-all"
+                                      style={{ width: `${Math.min(pct, 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">{pct}%</span>
+                                </td>
+                                <td className="p-3 text-right">
                                   <button
-                                    onClick={() => setSelectedApprenticeProfile(apprentice)}
-                                    className="px-2 py-1 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                    title="Ver Expediente"
+                                    onClick={() => setSelectedApprenticeProfile(app)}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-[#EBF8E7] text-[#00324D] rounded font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
                                   >
                                     <Eye className="w-3.5 h-3.5" />
                                     Expediente
                                   </button>
-                                  {apprentice.enrollmentStatus !== 'withdrawn' && (
-                                    <button
-                                      onClick={() => openRemoveLearnerModal(apprentice)}
-                                      className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer text-[11px]"
-                                      title="Quitar aprendiz de esta ficha"
-                                    >
-                                      <UserMinus className="w-3.5 h-3.5" />
-                                      Quitar
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
 
-            {/* PESTAÑA: NOVEDADES Y MURO DE ANUNCIOS */}
-            {activeClassTab === 'announcements' && (
-              <div className="space-y-5">
-                {/* Formulario rápido para publicar en el Muro */}
-                <form
-                  onSubmit={handleQuickPublishAnnouncement}
-                  className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3"
-                >
-                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <Megaphone className="w-4 h-4 text-[#39A900]" />
-                    <h4 className="text-xs font-bold text-[#00324D]">Publicar un anuncio para la Ficha #{activeFicha.number}</h4>
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Título del anuncio o aviso..."
-                    value={newAnnouncementTitle}
-                    onChange={(e) => setNewAnnouncementTitle(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50"
-                  />
-                  <textarea
-                    required
-                    rows={2}
-                    placeholder="Escribe el mensaje o aviso para los aprendices de este grupo..."
-                    value={newAnnouncementMessage}
-                    onChange={(e) => setNewAnnouncementMessage(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50 resize-none"
-                  />
-                  <div className="flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={isPublishingAnnouncement || !newAnnouncementTitle.trim() || !newAnnouncementMessage.trim()}
-                      className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{isPublishingAnnouncement ? 'Publicando...' : 'Publicar aviso'}</span>
-                    </button>
-                  </div>
-                </form>
+              {/* ========================================================= */}
+              {/* PESTAÑA 6: ASISTENCIA (PROMPT 29 Sección 20) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'attendance' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Control Diario de Asistencia — Ficha #{activeFicha.number}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Registro oficial de asistencia en Firestore (/attendance)
+                      </p>
+                    </div>
 
-                {/* Lista de anuncios en el muro */}
-                {classAnnouncements.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center space-y-2">
-                    <Megaphone className="w-10 h-10 text-slate-300 mx-auto" />
-                    <h4 className="text-sm font-bold text-slate-700">No hay avisos publicados en el muro aún</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Utiliza el formulario superior para comunicar instrucciones o fechas clave a tu grupo.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {classAnnouncements.map((ann) => (
-                      <div key={ann.id} className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs space-y-2">
-                        <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span className="font-bold text-[#00324D]">{ann.creatorName || 'Instructor'}</span>
-                          <span>{new Date(ann.publishedAt || ann.createdAt).toLocaleDateString('es-CO')}</span>
-                        </div>
-                        <h4 className="text-sm font-bold text-slate-900">{ann.title}</h4>
-                        <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{ann.message}</p>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <Calendar className="w-4 h-4 text-slate-500" />
+                        <input
+                          type="date"
+                          value={attendanceDate}
+                          onChange={(e) => setAttendanceDate(e.target.value)}
+                          className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:border-[#39A900] bg-white"
+                        />
                       </div>
-                    ))}
+                      <button
+                        onClick={handleSaveAttendance}
+                        disabled={isSavingAttendance || classApprentices.length === 0}
+                        className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5" />
+                        <span>{isSavingAttendance ? 'Guardando...' : 'Guardar Planilla'}</span>
+                      </button>
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
 
-            {/* PESTAÑA: EVIDENCIAS Y CALIFICACIONES */}
-            {activeClassTab === 'submissions' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                  <div>
-                    <h3 className="text-sm font-bold text-[#00324D]">Entregas de Evidencias ({classSubmissions.length})</h3>
-                    <p className="text-xs text-slate-500">Revisión y emisión de dictamen A, N o C con rúbricas</p>
-                  </div>
-                  <button
-                    onClick={() => onNavigateToActivities?.(activeFicha.number)}
-                    className="text-xs font-bold text-[#2E8500] hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>Ir a módulo de Calificación</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                  {attendanceFeedback && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2 animate-in fade-in">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>{attendanceFeedback}</span>
+                    </div>
+                  )}
 
-                {classSubmissions.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center space-y-2">
-                    <FolderArchive className="w-10 h-10 text-slate-300 mx-auto" />
-                    <h4 className="text-sm font-bold text-slate-700">No hay entregas registradas en esta ficha aún</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Cuando los aprendices envíen sus evidencias a través de Google Drive, aparecerán listadas aquí.
-                    </p>
+                  {/* Resumen de la sesión */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
+                      <span className="text-[11px] text-slate-500 block">En Sesión</span>
+                      <span className="text-lg font-bold font-mono text-[#00324D]">{totalSessionApps}</span>
+                    </div>
+                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center">
+                      <span className="text-[11px] text-emerald-800 font-bold block">Presentes</span>
+                      <span className="text-lg font-bold font-mono text-emerald-900">{presentCount}</span>
+                    </div>
+                    <div className="bg-rose-50 p-3 rounded-xl border border-rose-200 text-center">
+                      <span className="text-[11px] text-rose-800 font-bold block">Ausentes</span>
+                      <span className="text-lg font-bold font-mono text-rose-900">{absentCount}</span>
+                    </div>
+                    <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-center">
+                      <span className="text-[11px] text-amber-800 font-bold block">Tardanzas</span>
+                      <span className="text-lg font-bold font-mono text-amber-900">{lateCount}</span>
+                    </div>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
+                      <span className="text-[11px] text-slate-500 block">% Asistencia</span>
+                      <span className="text-lg font-bold font-mono text-[#00324D]">{attRate}%</span>
+                    </div>
                   </div>
-                ) : (
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-[#00324D] text-white border-b border-slate-700">
-                          <th className="p-3 font-bold">Aprendiz</th>
-                          <th className="p-3 font-bold">Actividad</th>
-                          <th className="p-3 font-bold">Fecha Envío</th>
-                          <th className="p-3 font-bold text-center">Estado</th>
-                          <th className="p-3 font-bold text-center">Nota (A/N/C)</th>
-                          <th className="p-3 font-bold text-right">Acción</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {classSubmissions.map((sub) => (
-                          <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="p-3 font-bold text-slate-900">{sub.learnerName || sub.learnerEmail || 'Aprendiz'}</td>
-                            <td className="p-3 text-slate-800">{sub.activityTitle || 'Actividad Formativa'}</td>
-                            <td className="p-3 text-slate-500">{new Date(sub.submittedAt).toLocaleDateString('es-CO')}</td>
-                            <td className="p-3 text-center">
-                              <StatusBadge status={sub.status as any} size="sm" />
-                            </td>
-                            <td className="p-3 text-center">
-                              {sub.grade ? (
-                                <span className="font-mono font-black px-2.5 py-0.5 rounded bg-[#00324D] text-[#8CE665]">
-                                  {sub.grade}
-                                </span>
-                              ) : (
-                                <span className="text-[11px] text-slate-400 font-mono">Por calificar</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right">
-                              <button
-                                onClick={() => onNavigateToActivities?.(activeFicha.number)}
-                                className="px-2.5 py-1 bg-[#39A900] hover:bg-[#2E8500] text-white rounded font-bold transition-all text-xs cursor-pointer inline-flex items-center gap-1"
-                              >
-                                <span>Evaluar</span>
-                                <ArrowRight className="w-3 h-3" />
-                              </button>
-                            </td>
+
+                  {classApprentices.length === 0 ? (
+                    <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+                      No hay aprendices registrados en esta ficha para tomar asistencia.
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
+                            <th className="p-3 font-bold">Aprendiz</th>
+                            <th className="p-3 font-bold text-center">Estado de Asistencia</th>
+                            <th className="p-3 font-bold">Observación Pedagógica</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {classApprentices.map((app) => {
+                            const currentStatus = attendanceStatuses[app.uid] || 'PRESENTE';
 
-            {/* PESTAÑA: RECURSOS Y MATERIALES */}
-            {activeClassTab === 'resources' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                  <div>
-                    <h3 className="text-sm font-bold text-[#00324D]">Materiales Pedagógicos ({classResources.length})</h3>
-                    <p className="text-xs text-slate-500">Documentos y guías compartidas con la Ficha #{activeFicha.number}</p>
-                  </div>
-                  <button
-                    onClick={() => setIsResourceModalOpen(true)}
-                    className="px-3.5 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    + Compartir recurso
-                  </button>
+                            return (
+                              <tr key={app.uid} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="p-3">
+                                  <div className="font-bold text-slate-900">{app.displayName}</div>
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {app.documentNumber !== 'No registrado' ? `CC ${app.documentNumber}` : app.email}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'PRESENTE' }))
+                                      }
+                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                                        currentStatus === 'PRESENTE'
+                                          ? 'bg-[#39A900] text-white shadow-xs'
+                                          : 'text-slate-600 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      PRESENTE
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'AUSENTE' }))
+                                      }
+                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                                        currentStatus === 'AUSENTE'
+                                          ? 'bg-rose-600 text-white shadow-xs'
+                                          : 'text-slate-600 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      AUSENTE
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'TARDE' }))
+                                      }
+                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                                        currentStatus === 'TARDE'
+                                          ? 'bg-amber-600 text-white shadow-xs'
+                                          : 'text-slate-600 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      TARDE
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'EXCUSADO' }))
+                                      }
+                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                                        currentStatus === 'EXCUSADO'
+                                          ? 'bg-blue-600 text-white shadow-xs'
+                                          : 'text-slate-600 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      EXCUSADO
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className="p-3">
+                                  <input
+                                    type="text"
+                                    placeholder="Observación opcional..."
+                                    value={attendanceObservations[app.uid] || ''}
+                                    onChange={(e) =>
+                                      setAttendanceObservations((prev) => ({ ...prev, [app.uid]: e.target.value }))
+                                    }
+                                    className="w-full px-2.5 py-1 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white"
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
+              )}
 
-                {classResources.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-slate-300 p-10 text-center space-y-3">
-                    <BookOpen className="w-10 h-10 text-slate-300 mx-auto" />
-                    <h4 className="text-sm font-bold text-slate-700">No hay recursos compartidos con esta ficha</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                      Sube archivos PDF, guías de aprendizaje o enlaces externos para tus aprendices.
-                    </p>
+              {/* ========================================================= */}
+              {/* PESTAÑA 7: SEGUIMIENTO (PROMPT 29 Sección 21) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'tracking' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#00324D]">
+                        Seguimiento y Acompañamiento — Ficha #{activeFicha.number}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Observaciones pedagógicas y actitudinales de aprendices (/learnerRecords)
+                      </p>
+                    </div>
                     <button
-                      onClick={() => setIsResourceModalOpen(true)}
-                      className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => setIsAddTrackingModalOpen(true)}
+                      className="px-3.5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
                     >
                       <Plus className="w-4 h-4" />
-                      Compartir primer recurso
+                      + Registrar Observación
                     </button>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {classResources.map((res) => (
-                      <div
-                        key={res.id}
-                        className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-2 flex flex-col justify-between"
+
+                  {classTrackingRecords.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-2">
+                      <ClipboardList className="w-10 h-10 text-slate-300 mx-auto" />
+                      <h4 className="text-sm font-bold text-slate-700">No hay observaciones registradas en esta ficha</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        Registra anotaciones sobre rendimiento académico, dificultades o reconocimientos de tus aprendices.
+                      </p>
+                      <button
+                        onClick={() => setIsAddTrackingModalOpen(true)}
+                        className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer mt-2"
                       >
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                              {res.resourceType}
-                            </span>
-                            <span className="text-[11px] text-slate-400">
-                              {new Date(res.createdAt).toLocaleDateString('es-CO')}
-                            </span>
-                          </div>
-                          <h4 className="text-xs font-bold text-slate-900 mt-2">{res.title}</h4>
-                          {res.description && (
-                            <p className="text-[11px] text-slate-600 mt-1 line-clamp-2">{res.description}</p>
-                          )}
-                        </div>
-                        {(res.driveUrl || res.externalUrl) && (
-                          <div className="pt-2 border-t border-slate-100">
-                            <a
-                              href={res.driveUrl || res.externalUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs font-bold text-[#2E8500] hover:underline inline-flex items-center gap-1"
-                            >
-                              <span>Abrir recurso</span>
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                        <Plus className="w-4 h-4" />
+                        Registrar primera observación
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {classTrackingRecords.map((rec) => {
+                        const learner = classApprentices.find((a) => a.uid === rec.userId);
 
-            {/* PESTAÑA: COMPETENCIAS Y RAPs */}
-            {activeClassTab === 'competencies' && (
-              <div className="space-y-4">
-                <div className="pb-1 border-b border-slate-100">
-                  <h3 className="text-sm font-bold text-[#00324D]">
-                    Competencias del Programa ({classCompetencies.length})
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Normas y Resultados de Aprendizaje (RAPs) del programa institucional
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  {classCompetencies.map((comp) => {
-                    const compRaps = classLearningOutcomes.filter((r) => r.competencyId === comp.id);
-
-                    return (
-                      <div key={comp.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200/80 space-y-2.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono font-bold text-[#00324D] bg-white px-2 py-0.5 rounded border border-slate-200">
-                              Código: {comp.code}
-                            </span>
-                            <span className="text-xs font-bold text-slate-800">{comp.name}</span>
-                          </div>
-                          <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-200/60 px-2 py-0.5 rounded">
-                            {comp.type}
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-slate-600 italic bg-white p-3 rounded-lg border border-slate-200/60 leading-relaxed">
-                          "{comp.description}"
-                        </p>
-
-                        {compRaps.length > 0 && (
-                          <div className="pt-2 border-t border-slate-200/60 space-y-1.5">
-                            <span className="text-[11px] font-bold text-slate-700">Resultados de Aprendizaje Vinculados:</span>
-                            <div className="space-y-1">
-                              {compRaps.map((rap) => (
-                                <div key={rap.id} className="text-[11px] text-slate-600 bg-white/70 px-2.5 py-1 rounded border border-slate-100 flex items-center gap-2">
-                                  <span className="font-mono font-bold text-[#39A900]">RAP {rap.sequence || 1}:</span>
-                                  <span className="truncate">{rap.description}</span>
-                                </div>
-                              ))}
+                        return (
+                          <div
+                            key={rec.id}
+                            className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-2"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-[#00324D]">
+                                  {learner?.displayName || rec.userId}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                                    rec.type === 'academic'
+                                      ? 'bg-blue-100 text-blue-800'
+                                      : 'bg-purple-100 text-purple-800'
+                                  }`}
+                                >
+                                  {rec.type === 'academic' ? 'Académico' : 'Comportamental'}
+                                </span>
+                                <span className="text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                                  {rec.category || 'Observación'}
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-slate-400">
+                                {rec.date ? new Date(rec.date).toLocaleDateString('es-CO') : '—'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">
+                              {rec.description}
+                            </p>
+                            <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-100">
+                              Registrado por: <strong>{rec.createdBy || 'Instructor'}</strong>
                             </div>
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PESTAÑA 8: ANUNCIOS (PROMPT 29 Sección 22) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'announcements' && (
+                <div className="space-y-5">
+                  {/* Formulario rápido para publicar en el Muro */}
+                  <form
+                    onSubmit={handleQuickPublishAnnouncement}
+                    className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3"
+                  >
+                    <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                      <Megaphone className="w-4 h-4 text-[#39A900]" />
+                      <h4 className="text-xs font-bold text-[#00324D]">
+                        Publicar un aviso para la Ficha #{activeFicha.number}
+                      </h4>
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Título del anuncio o aviso..."
+                      value={newAnnouncementTitle}
+                      onChange={(e) => setNewAnnouncementTitle(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50"
+                    />
+                    <textarea
+                      required
+                      rows={2}
+                      placeholder="Escribe el mensaje o aviso para los aprendices de este grupo..."
+                      value={newAnnouncementMessage}
+                      onChange={(e) => setNewAnnouncementMessage(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50 resize-none"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={
+                          isPublishingAnnouncement ||
+                          !newAnnouncementTitle.trim() ||
+                          !newAnnouncementMessage.trim()
+                        }
+                        className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{isPublishingAnnouncement ? 'Publicando...' : 'Publicar aviso'}</span>
+                      </button>
+                    </div>
+                  </form>
+
+                  {/* Lista de anuncios en el muro */}
+                  {classAnnouncements.length === 0 ? (
+                    <div className="bg-white rounded-xl border border-dashed border-slate-300 p-8 text-center space-y-2">
+                      <Megaphone className="w-10 h-10 text-slate-300 mx-auto" />
+                      <h4 className="text-sm font-bold text-slate-700">No hay avisos publicados en el muro aún</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                        Utiliza el formulario superior para comunicar instrucciones o fechas clave a tu grupo.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {classAnnouncements.map((ann) => (
+                        <div
+                          key={ann.id}
+                          className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs space-y-2"
+                        >
+                          <div className="flex items-center justify-between text-xs text-slate-500">
+                            <span className="font-bold text-[#00324D]">{ann.creatorName || 'Instructor'}</span>
+                            <span>{new Date(ann.publishedAt || ann.createdAt).toLocaleDateString('es-CO')}</span>
+                          </div>
+                          <h4 className="text-sm font-bold text-slate-900">{ann.title}</h4>
+                          <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{ann.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Modales Embebidos para Acciones de la Ficha */}
+          {isAddLearnerModalOpen && (
+            <AddLearnerModal
+              isOpen={isAddLearnerModalOpen}
+              onClose={() => setIsAddLearnerModalOpen(false)}
+              ficha={activeFicha}
+              instructorUid={instructorUid}
+              instructorName={userProfile?.displayName}
+              onLearnerAdded={() => {
+                loadActiveFichaClassData();
+                loadFichasAndCatalogs();
+              }}
+            />
+          )}
+
+          {isActivityModalOpen && (
+            <ActivityFormModal
+              isOpen={isActivityModalOpen}
+              onClose={() => setIsActivityModalOpen(false)}
+              defaultFichaId={activeFicha.id}
+              onActivitySaved={() => {
+                setIsActivityModalOpen(false);
+                loadActiveFichaClassData();
+                loadFichasAndCatalogs();
+              }}
+            />
+          )}
+
+          {isResourceModalOpen && (
+            <ResourceFormModal
+              isOpen={isResourceModalOpen}
+              onClose={() => setIsResourceModalOpen(false)}
+              preselectedFichaId={activeFicha.id}
+              onResourceSaved={() => {
+                setIsResourceModalOpen(false);
+                loadActiveFichaClassData();
+              }}
+            />
+          )}
+
+          {selectedApprenticeProfile && (
+            <ApprenticeAcademicProfileModal
+              apprentice={selectedApprenticeProfile}
+              onClose={() => setSelectedApprenticeProfile(null)}
+            />
+          )}
+
+          {/* Modal para Registrar Observación de Seguimiento */}
+          <Modal
+            isOpen={isAddTrackingModalOpen}
+            onClose={() => setIsAddTrackingModalOpen(false)}
+            title="Registrar Observación de Seguimiento"
+          >
+            <form onSubmit={handleSaveTrackingRecord} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Aprendiz *</label>
+                <select
+                  required
+                  value={newTrackingLearnerId}
+                  onChange={(e) => setNewTrackingLearnerId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                >
+                  <option value="">Selecciona un aprendiz de la ficha...</option>
+                  {classApprentices.map((app) => (
+                    <option key={app.uid} value={app.uid}>
+                      {app.displayName} ({app.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Tipo de Registro</label>
+                  <select
+                    value={newTrackingType}
+                    onChange={(e) => setNewTrackingType(e.target.value as LearnerRecordType)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                  >
+                    <option value="academic">Académico</option>
+                    <option value="behavioral">Comportamental</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Categoría</label>
+                  <select
+                    value={newTrackingCategory}
+                    onChange={(e) => setNewTrackingCategory(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                  >
+                    <option value="low_performance">Bajo Rendimiento</option>
+                    <option value="missing_evidence">Evidencia Faltante</option>
+                    <option value="learning_difficulty">Dificultad de Aprendizaje</option>
+                    <option value="improvement">Mejora Continua Destacada</option>
+                    <option value="participation">Excelente Participación</option>
+                  </select>
                 </div>
               </div>
-            )}
-          </>
-        )}
 
-        {/* Modales Embebidos para Acciones Rápidas de la Ficha */}
-        <AddLearnerModal
-          isOpen={isAddLearnerModalOpen}
-          onClose={() => setIsAddLearnerModalOpen(false)}
-          ficha={activeFicha}
-          instructorUid={instructorUid}
-          instructorName={userProfile?.displayName}
-          onLearnerAdded={() => {
-            loadActiveFichaClassData();
-            loadFichasAndCatalogs();
-          }}
-        />
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Descripción de la Observación *</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="Detalla la observación pedagógica..."
+                  value={newTrackingDescription}
+                  onChange={(e) => setNewTrackingDescription(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-[#39A900] bg-white resize-none"
+                />
+              </div>
 
-        <ActivityFormModal
-          isOpen={isActivityModalOpen}
-          onClose={() => setIsActivityModalOpen(false)}
-          defaultFichaId={activeFicha.id}
-          onActivitySaved={() => {
-            setIsActivityModalOpen(false);
-            loadActiveFichaClassData();
-          }}
-        />
-
-        <ResourceFormModal
-          isOpen={isResourceModalOpen}
-          onClose={() => setIsResourceModalOpen(false)}
-          preselectedFichaId={activeFicha.id}
-          onResourceSaved={() => {
-            setIsResourceModalOpen(false);
-            loadActiveFichaClassData();
-          }}
-        />
-
-        <ApprenticeAcademicProfileModal
-          apprentice={selectedApprenticeProfile}
-          onClose={() => setSelectedApprenticeProfile(null)}
-        />
-      </div>
-    );
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTrackingModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTracking || !newTrackingLearnerId || !newTrackingDescription.trim()}
+                  className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingTracking ? 'Guardando...' : 'Guardar Observación'}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        </div>
+      );
+    }
   }
 
   // =========================================================================
@@ -1351,7 +2325,15 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 className="bg-white rounded-2xl border-2 border-slate-200 hover:border-[#39A900] shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between group"
               >
                 {/* Cabecera con banner degradado SENA */}
-                <div className="bg-gradient-to-r from-[#00324D] to-[#004A73] p-5 text-white relative overflow-hidden border-b-4 border-[#39A900]">
+                <div
+                  onClick={() => {
+                    setActiveFichaId(ficha.id);
+                    setViewMode('detail');
+                    onSelectFicha?.(ficha.id, ficha);
+                  }}
+                  className="bg-gradient-to-r from-[#00324D] to-[#004A73] p-5 text-white relative overflow-hidden border-b-4 border-[#39A900] cursor-pointer"
+                  title={`Entrar a Ficha ${ficha.number}`}
+                >
                   <div className="relative z-10 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-xs font-black tracking-wider bg-white/15 text-[#8CE665] px-2.5 py-0.5 rounded-md border border-white/20">
@@ -1407,7 +2389,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                         onClick={() => {
                           setActiveFichaId(ficha.id);
                           setViewMode('detail');
-                          onSelectFicha?.(ficha.id);
+                          onSelectFicha?.(ficha.id, ficha);
                         }}
                         className="flex-1 py-2.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer group-hover:bg-[#39A900]"
                       >

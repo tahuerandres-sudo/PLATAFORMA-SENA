@@ -15,6 +15,7 @@ import {
   FolderArchive,
   Award,
   Users,
+  Calendar,
 } from 'lucide-react';
 import { ActiveRole } from './Header';
 import { Sidebar } from './Sidebar';
@@ -47,7 +48,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   const instructorBottomShortcuts: MobileShortcut[] = [
     { id: 'dashboard', label: 'Inicio', icon: Home },
     { id: 'fichas', label: 'Fichas', icon: Users },
-    { id: 'activities', label: 'Actividades', icon: FileText },
+    { id: 'calendar', label: 'Calendario', icon: Calendar },
     { id: 'submissions', label: 'Evidencias', icon: FolderArchive },
     {
       id: 'notifications',

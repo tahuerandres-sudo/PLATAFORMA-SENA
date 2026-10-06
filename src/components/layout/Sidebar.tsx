@@ -136,7 +136,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     { id: 'competencies', label: 'Competencias', icon: Target },
     { id: 'learning_outcomes', label: 'Resultados de aprendizaje', icon: ListOrdered },
-    { id: 'activities', label: 'Actividades', icon: FileText, badge: formatBadge(instructorMetrics?.activitiesCount) },
     { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
     {
       id: 'submissions',

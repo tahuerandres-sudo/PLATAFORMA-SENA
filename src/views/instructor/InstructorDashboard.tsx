@@ -65,12 +65,14 @@ interface InstructorDashboardProps {
   onNavigate: (viewId: string) => void;
   onOpenCreateActivity: () => void;
   onOpenCreateFicha: () => void;
+  onNavigateFicha?: (fichaId: string, ficha?: Ficha) => void;
 }
 
 export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({
   onNavigate,
   onOpenCreateActivity,
   onOpenCreateFicha,
+  onNavigateFicha,
 }) => {
   const { currentUser, userProfile } = useAuth();
   const instructorUid = currentUser?.uid || userProfile?.uid || '';
@@ -1038,7 +1040,13 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({
                       Filtrar dashboard
                     </button>
                     <button
-                      onClick={() => onNavigate('fichas')}
+                      onClick={() => {
+                        if (onNavigateFicha) {
+                          onNavigateFicha(ficha.id, ficha);
+                        } else {
+                          onNavigate('fichas');
+                        }
+                      }}
                       className="text-xs font-bold text-[#2E8500] hover:text-[#00324D] flex items-center gap-1 group cursor-pointer"
                     >
                       <span>Ver ficha</span>

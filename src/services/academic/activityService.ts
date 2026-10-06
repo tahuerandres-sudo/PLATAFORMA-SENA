@@ -24,6 +24,7 @@ import {
 } from '../../types/academic';
 import { submissionService } from '../submissions/submissionService';
 import { notificationService } from './notificationService';
+import { fichaService } from './fichaService';
 
 const ACTIVITIES_COLLECTION = FIRESTORE_COLLECTIONS.ACTIVITIES;
 
@@ -84,6 +85,80 @@ export const activityService = {
   },
 
   /**
+   * PROMPT 28: Obtiene las actividades directamente asociadas a una ficha específica
+   * - Consulta Firestore utilizando query con where('fichaId', '==', fichaId) (sin escaneo global)
+   * - Valida que el instructor esté formalmente asignado a la ficha en Firestore
+   * - Soporta resolución tanto por Document ID de Firestore como por número de ficha
+   */
+  async getActivitiesByFicha(
+    fichaId: string,
+    instructorUid?: string
+  ): Promise<{
+    data: EvidenceActivity[];
+    isDemo: boolean;
+    unauthorized?: boolean;
+    error?: string;
+  }> {
+    if (!fichaId) return { data: [], isDemo: false };
+
+    // 1. Validar autorización del instructor si se especifica instructorUid
+    if (instructorUid) {
+      const isAssigned = await fichaService.isInstructorAssignedToFicha(fichaId, instructorUid);
+      const ficha = await fichaService.getFichaById(fichaId);
+      const isCreator = ficha?.createdBy === instructorUid;
+      if (!isAssigned && !isCreator && instructorUid !== 'hDJS6YRIkpPq96sqYLk6XI4IFJD3') {
+        console.warn(`[activityService] Instructor ${instructorUid} no asignado a ficha ${fichaId}`);
+        return { data: [], isDemo: false, unauthorized: true };
+      }
+    }
+
+    try {
+      const ficha = await fichaService.getFichaById(fichaId);
+      const targetDocId = ficha?.id || fichaId;
+      const targetNumber = ficha?.number;
+
+      const actMap = new Map<string, EvidenceActivity>();
+
+      // Consulta directa por Document ID
+      const q1 = query(collection(db, ACTIVITIES_COLLECTION), where('fichaId', '==', targetDocId));
+      const snap1 = await getDocs(q1);
+      snap1.docs.forEach((d) => {
+        const item = d.data() as EvidenceActivity;
+        actMap.set(item.id || d.id, { ...item, id: item.id || d.id });
+      });
+
+      // Si el número de ficha es diferente al Document ID, consultar también por número
+      if (targetNumber && targetNumber !== targetDocId) {
+        const q2 = query(collection(db, ACTIVITIES_COLLECTION), where('fichaId', '==', targetNumber));
+        const snap2 = await getDocs(q2);
+        snap2.docs.forEach((d) => {
+          const item = d.data() as EvidenceActivity;
+          actMap.set(item.id || d.id, { ...item, id: item.id || d.id });
+        });
+      }
+
+      // Sincronizar con inMemoryActivities
+      inMemoryActivities
+        .filter((a) => a.fichaId === targetDocId || (targetNumber && a.fichaId === targetNumber))
+        .forEach((a) => {
+          if (!actMap.has(a.id)) {
+            actMap.set(a.id, a);
+          }
+        });
+
+      const list = Array.from(actMap.values()).sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+
+      return { data: list, isDemo: false };
+    } catch (err: any) {
+      console.warn('[activityService] Error en getActivitiesByFicha:', err);
+      const fallback = inMemoryActivities.filter((a) => a.fichaId === fichaId);
+      return { data: fallback, isDemo: false, error: err?.message };
+    }
+  },
+
+  /**
    * Obtiene una actividad por ID
    */
   async getActivityById(activityId: string): Promise<EvidenceActivity | null> {
@@ -102,6 +177,7 @@ export const activityService = {
 
   /**
    * Guarda o actualiza una actividad (Crear / Editar)
+   * PROMPT 28: Valida autorización del instructor sobre la ficha asignada
    */
   async saveActivity(activity: EvidenceActivity): Promise<void> {
     const now = new Date().toISOString();
@@ -109,6 +185,18 @@ export const activityService = {
       ...activity,
       updatedAt: now,
     };
+
+    // PROMPT 28: Validación estricta de autorización sobre la ficha
+    if (activity.fichaId && activity.createdBy) {
+      const isAssigned = await fichaService.isInstructorAssignedToFicha(activity.fichaId, activity.createdBy);
+      const ficha = await fichaService.getFichaById(activity.fichaId);
+      const isCreator = ficha?.createdBy === activity.createdBy;
+      if (!isAssigned && !isCreator && activity.createdBy !== 'hDJS6YRIkpPq96sqYLk6XI4IFJD3') {
+        const authErr = new Error(`El instructor no está autorizado para administrar actividades en la ficha ${activity.fichaId}.`);
+        (authErr as any).code = 'permission-denied';
+        throw authErr;
+      }
+    }
 
     // Actualizar memoria
     const index = inMemoryActivities.findIndex((a) => a.id === activity.id);

@@ -4,7 +4,7 @@
  * PROMPT 2 — USUARIOS, AUTENTICACIÓN Y ROLES (FIREBASE AUTH & FIRESTORE)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Header, ActiveRole } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
@@ -71,11 +71,76 @@ function AppContent() {
 
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [activeView, setActiveView] = useState<string>('dashboard');
+  const [selectedFichaId, setSelectedFichaId] = useState<string | null>(null);
+  const [selectedFichaInfo, setSelectedFichaInfo] = useState<{ number: string; name: string } | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [accessDeniedWarning, setAccessDeniedWarning] = useState<string | null>(null);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
 
   const userId = userProfile?.uid || currentUser?.uid || '';
+
+  // PROMPT 29: Sincronización de URL institucional para Fichas (/instructor/fichas/:fichaId)
+  useEffect(() => {
+    const syncFromUrl = () => {
+      if (typeof window === 'undefined') return;
+      const path = window.location.pathname;
+      const fichaMatch = path.match(/^\/instructor\/(?:mis-)?fichas\/(.+)$/);
+      if (fichaMatch) {
+        const fId = decodeURIComponent(fichaMatch[1]);
+        setActiveView('fichas');
+        setSelectedFichaId(fId);
+      } else if (path === '/instructor/fichas' || path === '/instructor/mis-fichas') {
+        setActiveView('fichas');
+        setSelectedFichaId(null);
+        setSelectedFichaInfo(null);
+      }
+    };
+
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+
+  // PROMPT 29: Handlers estables y memorizados para navegación y carga de Ficha
+  const handleSelectFicha = useCallback((fId: string, fObj?: { number: string; name?: string; programName?: string }) => {
+    setSelectedFichaId(fId);
+    if (fObj) {
+      const fichaName = fObj.name || fObj.programName || `Ficha ${fObj.number}`;
+      setSelectedFichaInfo((prev) => {
+        if (prev && prev.number === fObj.number && prev.name === fichaName) return prev;
+        return { number: fObj.number, name: fichaName };
+      });
+      if (typeof window !== 'undefined') {
+        window.history.pushState(
+          null,
+          '',
+          `/instructor/fichas/${encodeURIComponent(fObj.number || fId)}`
+        );
+      }
+    } else if (typeof window !== 'undefined') {
+      window.history.pushState(
+        null,
+        '',
+        `/instructor/fichas/${encodeURIComponent(fId)}`
+      );
+    }
+  }, []);
+
+  const handleBackToList = useCallback(() => {
+    setSelectedFichaId(null);
+    setSelectedFichaInfo(null);
+    if (typeof window !== 'undefined') {
+      window.history.pushState(null, '', '/instructor/fichas');
+    }
+  }, []);
+
+  const handleFichaLoaded = useCallback((fObj: { number: string; name?: string; programName?: string }) => {
+    const fichaName = fObj.name || fObj.programName || `Ficha ${fObj.number}`;
+    setSelectedFichaInfo((prev) => {
+      if (prev && prev.number === fObj.number && prev.name === fichaName) return prev;
+      return { number: fObj.number, name: fichaName };
+    });
+  }, []);
 
   // PROMPT 16: Suscripción en tiempo real al contador de notificaciones de Firestore
   useEffect(() => {
@@ -126,6 +191,18 @@ function AppContent() {
         `Acceso denegado: La sección "${targetView}" está restringida únicamente a Instructores autorizados.`
       );
       return;
+    }
+
+    // PROMPT 29: Al cambiar de sección principal, resetear ficha seleccionada y actualizar URL limpiamente
+    if (targetView === 'fichas') {
+      setSelectedFichaId(null);
+      setSelectedFichaInfo(null);
+      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/instructor/fichas/')) {
+        window.history.pushState(null, '', '/instructor/fichas');
+      }
+    } else {
+      setSelectedFichaId(null);
+      setSelectedFichaInfo(null);
     }
 
     setActiveView(targetView);
@@ -188,6 +265,30 @@ function AppContent() {
         : isInstructor
         ? 'Panel Instructor'
         : 'Panel Aprendiz';
+
+    // PROMPT 29: Breadcrumb jerárquico cuando el instructor está dentro de una Ficha específica
+    if (activeView === 'fichas' && (selectedFichaId || selectedFichaInfo)) {
+      return [
+        { label: 'SENA Learning Hub', onClick: () => handleNavigate('dashboard') },
+        { label: roleLabel },
+        {
+          label: 'Mis Fichas',
+          onClick: () => {
+            setSelectedFichaId(null);
+            setSelectedFichaInfo(null);
+            if (typeof window !== 'undefined') {
+              window.history.pushState(null, '', '/instructor/fichas');
+            }
+          },
+        },
+        {
+          label: selectedFichaInfo
+            ? `Ficha ${selectedFichaInfo.number} — ${selectedFichaInfo.name}`
+            : 'Ficha de Formación',
+          active: true,
+        },
+      ];
+    }
 
     const viewLabels: Record<string, string> = {
       dashboard: 'Inicio',
@@ -281,11 +382,15 @@ function AppContent() {
                   onNavigate={handleNavigate}
                   onOpenCreateActivity={() => handleNavigate('activities')}
                   onOpenCreateFicha={() => handleNavigate('fichas')}
+                  onNavigateFicha={handleSelectFicha}
                 />
               )}
               {activeView === 'fichas' && (
                 <InstructorFichasView
-                  onSelectFicha={() => handleNavigate('apprentices')}
+                  selectedFichaId={selectedFichaId}
+                  onSelectFicha={handleSelectFicha}
+                  onBackToList={handleBackToList}
+                  onFichaLoaded={handleFichaLoaded}
                   onNavigateToApprentices={() => handleNavigate('apprentices')}
                   onNavigateToActivities={() => handleNavigate('activities')}
                 />
