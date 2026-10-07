@@ -607,87 +607,99 @@ export const fichaService = {
     }
 
     const realDocId = ficha.id;
-    const stats = await this.getFichaStats(realDocId);
-    const hasAcademicData = stats.activitiesCount > 0 || stats.submissionsCount > 0;
-
-    // 2. Ejecutar estrategia de protección académica (Sección 18 & 19)
-    let isArchived = true;
     const now = new Date().toISOString();
 
-    // Actualizar en Firestore a status 'archived'
-    try {
-      await setDoc(doc(db, COLLECTION, realDocId), { status: 'archived', updatedAt: now }, { merge: true });
-      console.log('[fichaService] Ficha marcada como archivada en Firestore:', realDocId);
-    } catch (err: any) {
-      console.warn('[fichaService] Aviso actualizando estado de ficha en Firestore:', err?.message);
-    }
+    // =========================================================================
+    // PROMPT 30: ORDEN DE OPERACIONES OBLIGATORIO (Sección 8)
+    // 1. Identificar fichaId real y número.
+    // 2. Obtener enrollments donde fichaId == realDocId || fichaId == ficha.number.
+    // 3. Eliminar físicamente esas matrículas (deleteDoc) de /enrollments.
+    // 4. Desvincular fichaId en /users SIN borrar cuentas ni usuarios de Google.
+    // 5. Eliminar la ficha de /fichas (deleteDoc físico con fallback lógico).
+    // 6. Limpiar estado local y caché en memoria.
+    // 7. Notificar actualización de métricas del sistema.
+    // =========================================================================
 
-    // Si la ficha está completamente vacía (sin actividades, evidencias ni aprendices), intentar deleteDoc
-    if (!hasAcademicData && stats.apprenticesCount === 0) {
-      try {
-        await deleteDoc(doc(db, COLLECTION, realDocId));
-        isArchived = false;
-        console.log('[fichaService] Ficha sin datos eliminada físicamente de Firestore:', realDocId);
-      } catch (eDel) {
-        console.warn('[fichaService] No se pudo ejecutar deleteDoc físico, conservando archivado lógico:', eDel);
-      }
-    }
-
-    // Desactivar matrículas activas asociadas a la ficha para no dejar aprendices huérfanos activos
-    // NUNCA eliminar documentos en /users ni cuentas de Authentication
+    // PASO 1, 2, 3 & 4: ELIMINACIÓN DE MATRÍCULAS ASOCIADAS (Sección 7, 8 & 9)
     try {
       const enrDocIds = new Set<string>();
+      const userUidsToUnlink = new Set<string>();
+
+      // Consultar por Document ID real
       const enrQ = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', realDocId));
       const enrSnap = await getDocs(enrQ);
-      enrSnap.docs.forEach((d) => enrDocIds.add(d.id));
+      enrSnap.docs.forEach((d) => {
+        enrDocIds.add(d.id);
+        const data = d.data();
+        const uId = data.userId || data.learnerId || data.apprenticeId;
+        if (uId) userUidsToUnlink.add(uId);
+      });
 
+      // Consultar también por número de ficha si es distinto
       if (ficha.number && ficha.number !== realDocId) {
         const enrQNum = query(collection(db, FIRESTORE_COLLECTIONS.ENROLLMENTS), where('fichaId', '==', ficha.number));
         const enrSnapNum = await getDocs(enrQNum);
-        enrSnapNum.docs.forEach((d) => enrDocIds.add(d.id));
+        enrSnapNum.docs.forEach((d) => {
+          enrDocIds.add(d.id);
+          const data = d.data();
+          const uId = data.userId || data.learnerId || data.apprenticeId;
+          if (uId) userUidsToUnlink.add(uId);
+        });
       }
 
+      console.log(`[fichaService.deleteFicha] Eliminando ${enrDocIds.size} matrículas de la ficha ${ficha.number || realDocId}`);
+
+      // PASO 3: Eliminar FÍSICAMENTE los documentos en /enrollments
       for (const enrId of enrDocIds) {
         try {
-          const enrRef = doc(db, FIRESTORE_COLLECTIONS.ENROLLMENTS, enrId);
-          const enrSnap = await getDoc(enrRef);
-          if (enrSnap.exists()) {
-            const enrData = enrSnap.data();
-            await updateDoc(enrRef, {
-              status: 'withdrawn',
-              updatedAt: now,
-            });
+          await deleteDoc(doc(db, FIRESTORE_COLLECTIONS.ENROLLMENTS, enrId));
+          console.log('[fichaService.deleteFicha] Matrícula eliminada físicamente de Firestore:', enrId);
+        } catch (delEnrErr) {
+          console.warn('[fichaService.deleteFicha] Error eliminando enrollment:', enrId, delEnrErr);
+        }
+      }
 
-            // Si el aprendiz tenía vinculada esta ficha en /users, limpiar fichaId sin alterar la cuenta
-            const learnerUid = enrData.userId || enrData.learnerId || enrData.apprenticeId;
-            if (learnerUid) {
-              try {
-                const uRef = doc(db, FIRESTORE_COLLECTIONS.USERS, learnerUid);
-                const uSnap = await getDoc(uRef);
-                if (uSnap.exists()) {
-                  const uVal = uSnap.data();
-                  if (uVal.fichaId === realDocId || uVal.fichaId === ficha.number) {
-                    await updateDoc(uRef, { fichaId: '', updatedAt: now });
-                  }
-                }
-              } catch {
-                // No-op
-              }
+      // PASO 4: REGLA FUNDAMENTAL (Sección 2 & 9) — NUNCA ELIMINAR DOCUMENTOS /users
+      // Si el aprendiz tenía fichaId en su perfil de /users, limpiar fichaId sin alterar la cuenta
+      for (const learnerUid of userUidsToUnlink) {
+        try {
+          const uRef = doc(db, FIRESTORE_COLLECTIONS.USERS, learnerUid);
+          const uSnap = await getDoc(uRef);
+          if (uSnap.exists()) {
+            const uVal = uSnap.data();
+            if (uVal.fichaId === realDocId || uVal.fichaId === ficha.number) {
+              await updateDoc(uRef, { fichaId: '', updatedAt: now });
+              console.log('[fichaService.deleteFicha] fichaId desvinculado de usuario en /users:', learnerUid);
             }
           }
-        } catch {
-          // No-op
+        } catch (eUser) {
+          console.warn('[fichaService.deleteFicha] Error desvinculando usuario en /users:', learnerUid, eUser);
         }
       }
     } catch (eEnr) {
-      console.warn('[fichaService] Desactivación de matrículas de la ficha eliminada:', eEnr);
+      console.warn('[fichaService] Error procesando eliminación de matrículas:', eEnr);
     }
 
-    // 3. Remover de la memoria y caché persistente del navegador
+    // PASO 5: ELIMINAR LA FICHA (Sección 8 Paso 5)
+    let isArchived = false;
+    try {
+      await deleteDoc(doc(db, COLLECTION, realDocId));
+      console.log('[fichaService] Ficha eliminada físicamente de Firestore:', realDocId);
+    } catch (eDel) {
+      console.warn('[fichaService] No se pudo ejecutar deleteDoc físico directo, aplicando archivado lógico:', eDel);
+      try {
+        await setDoc(doc(db, COLLECTION, realDocId), { status: 'archived', updatedAt: now }, { merge: true });
+        isArchived = true;
+      } catch (archErr) {
+        console.warn('[fichaService] Error marcando ficha archivada:', archErr);
+      }
+    }
+
+    // PASO 6: LIMPIAR ESTADO LOCAL Y CACHÉ
     inMemoryFichas = inMemoryFichas.filter((f) => f.id !== realDocId && f.number !== ficha.number);
     saveCachedFichas(inMemoryFichas);
 
-    // 4. Notificar actualización de métricas del Sidebar
+    // PASO 7: NOTIFICAR ACTUALIZACIÓN DE MÉTRICAS DEL SISTEMA
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
     }

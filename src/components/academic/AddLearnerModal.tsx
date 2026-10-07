@@ -80,28 +80,12 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
     message: string;
   } | null>(null);
 
-  // Determinar catálogo de fichas disponibles garantizando siempre acceso
+  // Determinar catálogo de fichas disponibles sin datos simulados ni fichas ajenas (PROMPT 30)
   const availableFichas = useMemo(() => {
     if (ficha) return [ficha];
     if (fichas && fichas.length > 0) return fichas;
-    // Respaldo canónico para asegurar que el instructor siempre tenga su ficha formativa activa
-    return [
-      {
-        id: 'ficha_3409626',
-        number: '3409626',
-        programName: 'Gestión Contable y de Información Financiera',
-        name: 'Gestión Contable y de Información Financiera - Ficha 3409626',
-        instructorIds: instructorUid ? [instructorUid] : [],
-        programId: 'prog_gestion_contable',
-        centerId: 'center_ccs_ibague',
-        status: 'active',
-        shift: 'morning',
-        stage: 'lectiva',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      } as Ficha,
-    ];
-  }, [ficha, fichas, instructorUid]);
+    return [];
+  }, [ficha, fichas]);
 
   // Inicializar estado estrictamente cuando el modal pasa de cerrado a abierto
   const prevIsOpenRef = useRef(false);
@@ -118,7 +102,7 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
         const found = availableFichas.find(
           (f) => f.id === preselectedFichaId || f.number === preselectedFichaId
         );
-        setSelectedFichaId(found ? found.id : availableFichas[0]?.id || '');
+        setSelectedFichaId(found ? found.id : '');
       } else if (availableFichas.length > 0) {
         setSelectedFichaId(availableFichas[0].id);
       } else {
@@ -128,11 +112,10 @@ export const AddLearnerModal: React.FC<AddLearnerModalProps> = ({
     prevIsOpenRef.current = isOpen;
   }, [isOpen, ficha, preselectedFichaId, availableFichas]);
 
-  // Ficha activa seleccionada para el registro (nunca null si el modal está abierto)
+  // Ficha activa seleccionada para el registro (PROMPT 30: Estrictamente seleccionada o pasada por prop)
   const activeFicha =
     ficha ||
     availableFichas.find((f) => f.id === selectedFichaId || f.number === selectedFichaId) ||
-    availableFichas[0] ||
     null;
 
   // UID real del instructor autenticado en Firebase (Requisito 6)

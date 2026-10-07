@@ -142,6 +142,14 @@ function AppContent() {
     });
   }, []);
 
+  const handleNavigateApprentices = useCallback(() => {
+    handleNavigate('apprentices');
+  }, []);
+
+  const handleNavigateActivities = useCallback(() => {
+    handleNavigate('activities');
+  }, []);
+
   // PROMPT 16: Suscripción en tiempo real al contador de notificaciones de Firestore
   useEffect(() => {
     if (!userId) {
@@ -391,8 +399,8 @@ function AppContent() {
                   onSelectFicha={handleSelectFicha}
                   onBackToList={handleBackToList}
                   onFichaLoaded={handleFichaLoaded}
-                  onNavigateToApprentices={() => handleNavigate('apprentices')}
-                  onNavigateToActivities={() => handleNavigate('activities')}
+                  onNavigateToApprentices={handleNavigateApprentices}
+                  onNavigateToActivities={handleNavigateActivities}
                 />
               )}
               {activeView === 'apprentices' && <InstructorApprenticesView />}

@@ -525,9 +525,10 @@ export const enrollmentService = {
   },
 
   /**
-   * Obtiene la lista de matrículas por ficha desde Firestore
+   * Obtiene la lista de matrículas por ficha desde Firestore (PROMPT 30: Filtrar matrículas válidas)
    */
   async getEnrollmentsByFicha(fichaId: string): Promise<{ data: Enrollment[]; isDemo: boolean }> {
+    if (!fichaId) return { data: [], isDemo: false };
     try {
       const q = query(collection(db, COLLECTION), where('fichaId', '==', fichaId));
       const snap = await getDocs(q);
@@ -537,14 +538,14 @@ export const enrollmentService = {
           ...inMemoryEnrollments.filter((e) => !fromDb.some((de) => de.id === e.id)),
           ...fromDb,
         ];
-        const filtered = merged.filter((e) => e.fichaId === fichaId);
+        const filtered = merged.filter((e) => e.fichaId === fichaId && e.status !== 'withdrawn' && (e.status as any) !== 'removed');
         return { data: filtered, isDemo: false };
       }
     } catch (error) {
       console.warn('[enrollmentService] Lectura de enrollments en Firestore:', error);
     }
 
-    const filtered = inMemoryEnrollments.filter((e) => e.fichaId === fichaId);
+    const filtered = inMemoryEnrollments.filter((e) => e.fichaId === fichaId && e.status !== 'withdrawn' && (e.status as any) !== 'removed');
     return { data: filtered, isDemo: false };
   },
 
@@ -759,11 +760,34 @@ export const enrollmentService = {
         return { data: [], isDemo: false };
       }
 
+      // PROMPT 30: Filtrar estrictamente matrículas válidas (no withdrawn ni retiradas)
+      const validEnrollments = enrollments.filter(
+        (e) => e.status !== 'withdrawn' && (e.status as any) !== 'removed' && (e.status as any) !== 'inactive'
+      );
+
+      if (validEnrollments.length === 0) {
+        return { data: [], isDemo: false };
+      }
+
       const apprentices: ApprenticeWithEnrollment[] = [];
 
-      for (const enr of enrollments) {
+      for (const enr of validEnrollments) {
+        // En consulta de ficha específica, asegurar que pertenezca exactamente a la ficha
+        if (fichaId !== 'all') {
+          const targetFicha = targetFichas[0];
+          if (enr.fichaId !== targetFicha.id && enr.fichaId !== targetFicha.number) {
+            continue;
+          }
+        }
+
+        const ficha = fichaMap.get(enr.fichaId);
+        // Si la ficha no existe en el mapa de fichas válidas y es consulta por ficha, descartar
+        if (!ficha && fichaId !== 'all') {
+          continue;
+        }
+
+        const effectiveFicha = ficha || targetFichas[0];
         const uid = enr.userId || enr.learnerId || enr.apprenticeId;
-        const ficha = fichaMap.get(enr.fichaId) || targetFichas[0];
         const isPending = enr.status === 'pending' || !uid;
 
         let userData: any = null;
@@ -794,8 +818,8 @@ export const enrollmentService = {
           status: isPending ? 'pending' : (userData?.status as any) || (enr.status as any) || 'active',
           enrollmentId: enr.id,
           enrollmentStatus: enr.status,
-          programName: ficha?.programName || userData?.programName || 'No registrado',
-          fichaNumber: ficha?.number || enr.fichaId || 'No registrado',
+          programName: effectiveFicha?.programName || userData?.programName || 'No registrado',
+          fichaNumber: effectiveFicha?.number || enr.fichaId || 'No registrado',
           courseName: 'No registrado',
           progressPercent: 0,
           averageGrade: 'N/A',
@@ -966,5 +990,114 @@ export const enrollmentService = {
     }
 
     return updated;
+  },
+
+  /**
+   * PROMPT 30: Elimina definitivamente todas las matrículas vinculadas a una ficha
+   * - Elimina los documentos /enrollments de Firestore de forma controlada
+   * - Limpia inMemoryEnrollments
+   * - Limpia el campo fichaId en /users si apuntaba a esta ficha (NUNCA elimina la cuenta del aprendiz ni el documento /users)
+   */
+  async deleteEnrollmentsByFicha(fichaId: string, fichaNumber?: string): Promise<number> {
+    if (!fichaId) return 0;
+    const docIds = new Set<string>();
+    const userUidsToUnlink = new Set<string>();
+    const now = new Date().toISOString();
+
+    const targets = [fichaId];
+    if (fichaNumber && fichaNumber !== fichaId) targets.push(fichaNumber);
+
+    for (const tId of targets) {
+      try {
+        const q = query(collection(db, COLLECTION), where('fichaId', '==', tId));
+        const snap = await getDocs(q);
+        snap.docs.forEach((d) => {
+          docIds.add(d.id);
+          const data = d.data();
+          const uId = data.userId || data.learnerId || data.apprenticeId;
+          if (uId) userUidsToUnlink.add(uId);
+        });
+      } catch (err) {
+        console.warn(`[enrollmentService] Error buscando matrículas para eliminar de ficha ${tId}:`, err);
+      }
+    }
+
+    // Borrado físico de cada documento en /enrollments
+    for (const id of docIds) {
+      try {
+        await deleteDoc(doc(db, COLLECTION, id));
+        console.log('[enrollmentService] Matrícula eliminada físicamente de Firestore:', id);
+      } catch (eDel) {
+        console.warn(`[enrollmentService] Error eliminando enrollment ${id}:`, eDel);
+      }
+    }
+
+    // Limpieza de memoria local
+    inMemoryEnrollments = inMemoryEnrollments.filter(
+      (e) => !targets.includes(e.fichaId) && !docIds.has(e.id)
+    );
+
+    // Desvincular fichaId de usuarios en /users sin borrar cuentas
+    for (const uId of userUidsToUnlink) {
+      try {
+        const uRef = doc(db, USERS_COLLECTION, uId);
+        const uSnap = await getDoc(uRef);
+        if (uSnap.exists()) {
+          const val = uSnap.data();
+          if (targets.includes(val.fichaId)) {
+            await updateDoc(uRef, { fichaId: '', updatedAt: now });
+          }
+        }
+      } catch {
+        // No-op
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
+    return docIds.size;
+  },
+
+  /**
+   * PROMPT 30: Detecta y elimina matrículas huérfanas cuya ficha ya no existe en Firestore
+   * No elimina usuarios ni datos de otras fichas.
+   */
+  async cleanOrphanEnrollments(instructorUid?: string): Promise<number> {
+    let deletedCount = 0;
+    try {
+      const allFichasRes = await fichaService.getFichas(instructorUid);
+      const existingFichaIds = new Set<string>();
+      (allFichasRes.data || []).forEach((f) => {
+        existingFichaIds.add(f.id);
+        if (f.number) existingFichaIds.add(f.number);
+      });
+
+      const snap = await getDocs(collection(db, COLLECTION));
+      for (const d of snap.docs) {
+        const data = d.data() as Enrollment;
+        if (data.fichaId && !existingFichaIds.has(data.fichaId)) {
+          // Confirmar en Firestore si el documento de la ficha existe o está activo
+          const fSnap = await getDoc(doc(db, FIRESTORE_COLLECTIONS.FICHAS, data.fichaId));
+          const fData = fSnap.exists() ? fSnap.data() : null;
+          const isFichaGone = !fSnap.exists() || fData?.status === 'archived' || fData?.status === 'deleted';
+
+          if (isFichaGone) {
+            console.log('[enrollmentService] Limpiando matrícula huérfana:', d.id, 'Ficha inexistente:', data.fichaId);
+            try {
+              await deleteDoc(doc(db, COLLECTION, d.id));
+              deletedCount++;
+              inMemoryEnrollments = inMemoryEnrollments.filter((e) => e.id !== d.id);
+            } catch (delErr) {
+              console.warn('[enrollmentService] Error eliminando enrollment huérfano:', d.id, delErr);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[enrollmentService] Error en cleanOrphanEnrollments:', err);
+    }
+    return deletedCount;
   },
 };

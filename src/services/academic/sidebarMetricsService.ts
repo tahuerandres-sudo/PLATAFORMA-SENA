@@ -148,8 +148,8 @@ class SidebarMetricsService {
       enrollmentsResults.flat().forEach((enr) => {
         const learnerId = (enr.userId || enr.learnerId || enr.apprenticeId) as string | undefined;
         const status = enr.status as string | undefined;
-        // Solo contar matrículas válidas (no canceladas)
-        if (learnerId && status !== 'cancelled' && status !== 'retirado') {
+        // Solo contar matrículas válidas (no canceladas ni retiradas)
+        if (learnerId && status !== 'cancelled' && status !== 'retirado' && status !== 'withdrawn' && status !== 'removed') {
           uniqueLearnerIds.add(learnerId);
         }
       });

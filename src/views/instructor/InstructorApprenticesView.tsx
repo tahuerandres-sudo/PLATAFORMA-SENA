@@ -87,8 +87,8 @@ export const InstructorApprenticesView: React.FC<InstructorApprenticesViewProps>
           // Si initialFichaNumber es '3409626' o similar y existe en las fichas, seleccionarla
           if (initialFichaNumber !== 'all' && res.data.some((f) => f.number === initialFichaNumber || f.id === initialFichaNumber)) {
             setSelectedFicha(initialFichaNumber);
-          } else if (res.data.length > 0 && selectedFicha === 'all') {
-            // Mantener 'all' o la primera ficha
+          } else if (selectedFicha !== 'all' && !res.data.some((f) => f.number === selectedFicha || f.id === selectedFicha)) {
+            setSelectedFicha('all');
           }
         }
       } catch (err) {

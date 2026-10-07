@@ -212,6 +212,13 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const loadFichasAndCatalogs = useCallback(async () => {
     setLoading(true);
     try {
+      // PROMPT 30: Limpieza preventiva de matrículas huérfanas de fichas eliminadas previamente
+      try {
+        await enrollmentService.cleanOrphanEnrollments(instructorUid);
+      } catch (eClean) {
+        console.warn('[InstructorFichasView] Aviso limpieza de huérfanos:', eClean);
+      }
+
       const [fichasRes, progsRes, centersRes] = await Promise.all([
         fichaService.getFichas(instructorUid),
         programService.getPrograms(),
@@ -275,17 +282,17 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [instructorUid, initialFichaId]);
+  }, [instructorUid, initialFichaId, selectedFichaId]);
 
   useEffect(() => {
     loadFichasAndCatalogs();
   }, [loadFichasAndCatalogs]);
 
-  // PROMPT 29: Sincronización del ID de Ficha seleccionado desde Router / URL
+  // PROMPT 29 & 30: Sincronización del ID de Ficha seleccionado desde Router / URL
   useEffect(() => {
     if (selectedFichaId) {
       setActiveFichaId((prev) => (prev !== selectedFichaId ? selectedFichaId : prev));
-      setViewMode('detail');
+      setViewMode((prev) => (prev !== 'detail' ? 'detail' : prev));
     } else if (selectedFichaId === null) {
       setViewMode((prev) => (prev !== 'grid' ? 'grid' : prev));
       setActiveFichaId((prev) => (prev !== '' ? '' : prev));
@@ -309,7 +316,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     } else if (viewMode === 'grid') {
       lastReportedFichaIdRef.current = null;
     }
-  }, [activeFicha, viewMode, onFichaLoaded]);
+  }, [activeFicha?.id, viewMode, onFichaLoaded]);
 
   // PROMPT 29: Validación estricta de seguridad institucional (Sección 27)
   const isAuthorizedInstructor = useMemo(() => {
@@ -614,10 +621,14 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       const deletedId = fichaToDelete.id;
       setFichaToDelete(null);
 
-      // Si la ficha eliminada era la ficha activa, volver al grid
+      // Si la ficha eliminada era la ficha activa, volver al grid y limpiar estado
       if (activeFichaId === deletedId) {
         setActiveFichaId('');
         setViewMode('grid');
+        setClassApprentices([]);
+        setClassActivities([]);
+        setClassSubmissions([]);
+        onBackToList?.();
       }
 
       await loadFichasAndCatalogs();
@@ -2721,11 +2732,11 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             </div>
 
             <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-1">
-              <strong className="font-bold block">Protección de Datos Académicos SENA:</strong>
+              <strong className="font-bold block">Protección de Datos Académicos SENA (Prompt 30):</strong>
               <p className="text-[11px] text-emerald-800">
                 • Los usuarios de los aprendices en <code className="font-mono text-emerald-950 font-semibold">/users</code> y cuentas de Google NO serán eliminados.
                 <br />
-                • Las matrículas se marcarán como retiradas y las evidencias se archivarán para garantizar la custodia y trazabilidad pedagógica.
+                • Las matrículas vinculadas a esta ficha se eliminarán de <code className="font-mono text-emerald-950 font-semibold">/enrollments</code>, garantizando que futuras fichas creadas comiencen 100% vacías sin heredar aprendices.
               </p>
             </div>
 

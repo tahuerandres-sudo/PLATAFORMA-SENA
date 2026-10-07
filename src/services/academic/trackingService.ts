@@ -935,7 +935,7 @@ export const trackingService = {
 
     return {
       userId,
-      fichaId: fichaId || 'ficha_3409626',
+      fichaId: fichaId || '',
       totalSessions,
       presentCount,
       absentCount,

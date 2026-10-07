@@ -104,11 +104,8 @@ export const academicRecordService = {
         console.warn('[academicRecordService] Error consultando matrícula:', err);
       }
 
-      // Si no hay matrícula explícita, intentar inferir fichaId desde el perfil del usuario
-      const fichaId =
-        enrollment?.fichaId ||
-        userData?.fichaId ||
-        'ficha_3409626'; // ID canónico por defecto si la matrícula no está indexada
+      // Si no hay matrícula explícita, intentar inferir fichaId desde el perfil del usuario (PROMPT 30: Sin fallbacks inventados)
+      const fichaId = enrollment?.fichaId || userData?.fichaId || '';
 
       // 3. Obtener datos de la Ficha
       let ficha: Ficha | null = null;

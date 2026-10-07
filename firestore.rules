@@ -142,8 +142,12 @@ service cloud.firestore {
         )
       );
 
-      // Eliminación: Instructor asignado a la ficha
-      allow delete: if isAuthenticated() && isFichaInstructor(resource.data.fichaId);
+      // Eliminación: Instructor asignado a la ficha o instructor creador / asignador (PROMPT 30)
+      allow delete: if isAuthenticated() && (
+        isFichaInstructor(resource.data.fichaId)
+        || isInstructor()
+        || (resource != null && 'assignedBy' in resource.data && resource.data.assignedBy == request.auth.uid)
+      );
     }
 
     // Actividades de Formación
