@@ -25,6 +25,7 @@ import {
 import { submissionService } from '../submissions/submissionService';
 import { notificationService } from './notificationService';
 import { fichaService } from './fichaService';
+import { enrollmentService } from './enrollmentService';
 
 const ACTIVITIES_COLLECTION = FIRESTORE_COLLECTIONS.ACTIVITIES;
 
@@ -155,6 +156,121 @@ export const activityService = {
       console.warn('[activityService] Error en getActivitiesByFicha:', err);
       const fallback = inMemoryActivities.filter((a) => a.fichaId === fichaId);
       return { data: fallback, isDemo: false, error: err?.message };
+    }
+  },
+
+  /**
+   * PROMPT 32: Obtiene las actividades publicadas de todas las fichas en las que el aprendiz está matriculado.
+   * Regla fundamental: El aprendiz solo ve actividades publicadas (no draft) de sus fichas autorizadas vía enrollments.
+   */
+  async getActivitiesForLearner(
+    learnerId: string,
+    learnerEmail?: string
+  ): Promise<{
+    data: EvidenceActivity[];
+    isDemo: boolean;
+    fichaIds: string[];
+  }> {
+    if (!learnerId && !learnerEmail) {
+      return { data: [], isDemo: false, fichaIds: [] };
+    }
+
+    try {
+      // 1. Obtener todas las matrículas activas del aprendiz
+      const enrollments = await enrollmentService.getLearnerEnrollments(learnerId, learnerEmail);
+      if (enrollments.length === 0) {
+        return { data: [], isDemo: false, fichaIds: [] };
+      }
+
+      // 2. Extraer fichas únicas del aprendiz (resolviendo tanto documentId como number)
+      const allowedFichaIdSet = new Set<string>();
+      for (const enr of enrollments) {
+        if (enr.fichaId) {
+          allowedFichaIdSet.add(enr.fichaId);
+          try {
+            const f = await fichaService.getFichaById(enr.fichaId);
+            if (f?.id) allowedFichaIdSet.add(f.id);
+            if (f?.number) allowedFichaIdSet.add(f.number);
+          } catch {}
+        }
+      }
+
+      // Comprobar también perfil de usuario por si tiene ficha asignada directamente
+      if (learnerId) {
+        try {
+          const uSnap = await getDoc(doc(db, 'users', learnerId));
+          if (uSnap.exists()) {
+            const uData = uSnap.data();
+            if (uData?.fichaId) {
+              allowedFichaIdSet.add(uData.fichaId);
+              try {
+                const f = await fichaService.getFichaById(uData.fichaId);
+                if (f?.id) allowedFichaIdSet.add(f.id);
+                if (f?.number) allowedFichaIdSet.add(f.number);
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      const fichaIdsArray = Array.from(allowedFichaIdSet);
+      if (fichaIdsArray.length === 0) {
+        return { data: [], isDemo: false, fichaIds: [] };
+      }
+
+      // 3. Consultar las actividades de cada ficha
+      const actMap = new Map<string, EvidenceActivity>();
+
+      // Firestore queries por cada fichaId relevante
+      await Promise.all(
+        fichaIdsArray.map(async (fId) => {
+          try {
+            const q = query(collection(db, ACTIVITIES_COLLECTION), where('fichaId', '==', fId));
+            const snap = await getDocs(q);
+            snap.docs.forEach((d) => {
+              const act = d.data() as EvidenceActivity;
+              const actId = act.id || d.id;
+              if (act.status !== 'draft') {
+                actMap.set(actId, { ...act, id: actId });
+              }
+            });
+          } catch (errQuery) {
+            console.warn(`[activityService] Error consultando actividades de ficha ${fId}:`, errQuery);
+          }
+        })
+      );
+
+      // Fallback: Si no arrojó resultados por consulta directa, buscar en la colección completa de actividades
+      if (actMap.size === 0) {
+        try {
+          const allSnap = await getDocs(collection(db, ACTIVITIES_COLLECTION));
+          allSnap.docs.forEach((d) => {
+            const act = d.data() as EvidenceActivity;
+            const actId = act.id || d.id;
+            if (act.status !== 'draft' && fichaIdsArray.includes(act.fichaId)) {
+              actMap.set(actId, { ...act, id: actId });
+            }
+          });
+        } catch {}
+      }
+
+      // Sincronizar con inMemoryActivities
+      inMemoryActivities.forEach((a) => {
+        if (a.status !== 'draft' && fichaIdsArray.includes(a.fichaId)) {
+          if (!actMap.has(a.id)) {
+            actMap.set(a.id, a);
+          }
+        }
+      });
+
+      const list = Array.from(actMap.values()).sort(
+        (a, b) => new Date(b.createdAt || b.publishedAt || 0).getTime() - new Date(a.createdAt || a.publishedAt || 0).getTime()
+      );
+
+      return { data: list, isDemo: false, fichaIds: fichaIdsArray };
+    } catch (err: any) {
+      console.warn('[activityService] Error en getActivitiesForLearner:', err);
+      return { data: [], isDemo: false, fichaIds: [] };
     }
   },
 

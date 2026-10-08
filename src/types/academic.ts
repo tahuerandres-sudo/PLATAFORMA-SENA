@@ -276,7 +276,7 @@ export interface EvidenceActivity {
   programId?: string; // Ref a programa de formación
   courseId?: string;
   fichaId: string;
-  competencyId: string;
+  competencyId?: string;
   learningOutcomeId: string;
   learningOutcomeIds?: string[]; // Soporte para evaluar uno o varios RAP (Sección 13)
   createdBy: string; // Ref a UID del Instructor

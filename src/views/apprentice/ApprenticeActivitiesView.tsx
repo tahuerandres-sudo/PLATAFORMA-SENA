@@ -22,6 +22,7 @@ import {
   BookOpen,
   ShieldAlert,
   Sliders,
+  Eye,
 } from 'lucide-react';
 import {
   EvidenceActivity,
@@ -30,12 +31,14 @@ import {
   Course,
   LearningOutcome,
   Rubric,
+  Ficha,
 } from '../../types/academic';
 import { activityService } from '../../services/academic/activityService';
 import { rubricService } from '../../services/academic/rubricService';
 import { submissionService } from '../../services/submissions/submissionService';
 import { trackingService } from '../../services/academic/trackingService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
+import { fichaService } from '../../services/academic/fichaService';
 import { learningOutcomeService } from '../../services/academic/learningOutcomeService';
 import { getCourses } from '../../services/firebase/academicService';
 import { getEvidenceTypeConfig } from '../../config/fileLimits';
@@ -43,16 +46,26 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
 import { SubmissionForm } from '../../components/evidence/SubmissionForm';
 import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
+import { ActivityDetailModal } from '../../components/evidence/ActivityDetailModal';
 import { DriveConnectionStatus } from '../../components/evidence/DriveConnectionStatus';
 import { useAuth } from '../../hooks/useAuth';
 
-export const ApprenticeActivitiesView: React.FC = () => {
+interface ApprenticeActivitiesViewProps {
+  initialActivityId?: string;
+}
+
+export const ApprenticeActivitiesView: React.FC<ApprenticeActivitiesViewProps> = ({
+  initialActivityId,
+}) => {
   const { userProfile, currentUser } = useAuth();
   const learnerId = currentUser?.uid || userProfile?.uid || '';
+  const learnerEmail = currentUser?.email || userProfile?.email || '';
 
   const [activities, setActivities] = useState<EvidenceActivity[]>([]);
   const [submissions, setSubmissions] = useState<AcademicSubmission[]>([]);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
+  const [fichasMap, setFichasMap] = useState<Record<string, Ficha>>({});
   const [learningOutcomes, setLearningOutcomes] = useState<LearningOutcome[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [rubricsMap, setRubricsMap] = useState<Record<string, Rubric>>({});
@@ -69,36 +82,63 @@ export const ApprenticeActivitiesView: React.FC = () => {
   const [selectedActivity, setSelectedActivity] = useState<EvidenceActivity | null>(null);
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
 
+  // Modal de detalle de actividad (PROMPT 32: Flujo Ver Detalle → Entregar Evidencia)
+  const [detailActivity, setDetailActivity] = useState<EvidenceActivity | null>(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+
   const loadData = async () => {
     if (!learnerId) return;
     setLoading(true);
     try {
-      const [actRes, subRes, blockRes, enr, rapsRes, coursesList] = await Promise.all([
-        activityService.getActivities(),
+      // PROMPT 21 & 32: Activar cualquier matrícula pendiente que coincida con el correo del aprendiz
+      if (learnerEmail) {
+        try {
+          await enrollmentService.activatePendingEnrollmentsForUser({
+            uid: learnerId,
+            email: learnerEmail,
+            displayName: userProfile?.displayName || currentUser?.displayName || undefined,
+          });
+        } catch (eAct) {
+          console.warn('[ApprenticeActivitiesView] Aviso activación de matrículas:', eAct);
+        }
+      }
+
+      // Consulta de actividades autorizadas directamente por ficha de matrícula (PROMPT 32)
+      const [actsRes, subRes, blockRes, enrList, rapsRes, coursesList] = await Promise.all([
+        activityService.getActivitiesForLearner(learnerId, learnerEmail),
         submissionService.getSubmissionsByLearner(learnerId),
         trackingService.checkLearnerHasEvidenceBlock(learnerId),
-        enrollmentService.getEnrollmentByLearnerId(learnerId),
+        enrollmentService.getLearnerEnrollments(learnerId, learnerEmail),
         learningOutcomeService.getLearningOutcomes(),
         getCourses(),
       ]);
 
-      setEnrollment(enr);
+      const primaryEnr = enrList[0] || null;
+      setEnrollments(enrList);
+      setEnrollment(primaryEnr);
       setLearningOutcomes(rapsRes.data || []);
       setCourses(coursesList || []);
 
-      // Filtrar actividades: Solo de su ficha/programa y que no estén en borrador (PROMPT 21)
-      // NINGÚN APRENDIZ TIENE ACCESO ACADÉMICO POR DEFECTO.
-      let visibleActivities: EvidenceActivity[] = [];
-      if (enr?.fichaId) {
-        visibleActivities = actRes.data.filter(
-          (a) =>
-            a.status !== 'draft' &&
-            (a.fichaId === enr.fichaId || a.fichaId === (enr as any).fichaNumber)
-        );
-      }
+      const visibleActivities = actsRes.data || [];
       setActivities(visibleActivities);
       setSubmissions(subRes.data || []);
       setActiveBlock(blockRes.blocked ? blockRes : null);
+
+      // Cargar información de fichas involucradas
+      const fMap: Record<string, Ficha> = {};
+      const uniqueFichaIds = Array.from(
+        new Set([
+          ...visibleActivities.map((a) => a.fichaId).filter(Boolean),
+          ...enrList.map((e) => e.fichaId).filter(Boolean),
+        ])
+      );
+      for (const fId of uniqueFichaIds) {
+        try {
+          const ficha = await fichaService.getFichaById(fId);
+          if (ficha) fMap[fId] = ficha;
+        } catch {}
+      }
+      setFichasMap(fMap);
 
       // Cargar rúbricas publicadas de las actividades (Prompt 19)
       const rubrics: Record<string, Rubric> = {};
@@ -128,11 +168,27 @@ export const ApprenticeActivitiesView: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [learnerId]);
+  }, [learnerId, learnerEmail]);
+
+  // PROMPT 32: Apertura directa al navegar desde Notificación
+  useEffect(() => {
+    if (initialActivityId && activities.length > 0) {
+      const target = activities.find((a) => a.id === initialActivityId);
+      if (target) {
+        setDetailActivity(target);
+        setDetailModalOpen(true);
+      }
+    }
+  }, [initialActivityId, activities]);
 
   // Asociar actividad con su entrega del aprendiz
   const getSubmissionForActivity = (actId: string): AcademicSubmission | undefined => {
     return submissions.find((s) => s.activityId === actId);
+  };
+
+  const handleOpenDetail = (act: EvidenceActivity) => {
+    setDetailActivity(act);
+    setDetailModalOpen(true);
   };
 
   const filteredActivities = activities.filter((act) => {
@@ -191,6 +247,14 @@ export const ApprenticeActivitiesView: React.FC = () => {
     const s = getSubmissionForActivity(a.id);
     return s && (s.status === 'approved' || s.status === 'not_approved');
   }).length;
+
+  // Un aprendiz tiene acceso si tiene al menos una actividad, ficha asociada, matrícula o perfil
+  const hasEnrollmentAccess = Boolean(
+    activities.length > 0 ||
+    enrollments.length > 0 ||
+    enrollment?.fichaId ||
+    userProfile?.fichaId
+  );
 
   return (
     <div className="space-y-6 animate-in fade-in duration-150">
@@ -284,9 +348,10 @@ export const ApprenticeActivitiesView: React.FC = () => {
       {/* 3. Grid de Actividades */}
       {loading ? (
         <div className="py-12 text-center text-xs text-slate-500">
+          <RefreshCw className="w-5 h-5 animate-spin text-[#39A900] mx-auto mb-2" />
           Cargando actividades formativas asignadas...
         </div>
-      ) : !enrollment?.fichaId ? (
+      ) : !hasEnrollmentAccess ? (
         <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-12 text-center max-w-xl mx-auto space-y-4">
           <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
             <AlertCircle className="w-7 h-7" />
@@ -320,6 +385,7 @@ export const ApprenticeActivitiesView: React.FC = () => {
             const sub = getSubmissionForActivity(act.id);
             const rap = learningOutcomes.find((r) => r.id === act.learningOutcomeId);
             const course = courses.find((c) => c.id === act.courseId);
+            const ficha = fichasMap[act.fichaId];
 
             return (
               <div
@@ -335,8 +401,13 @@ export const ApprenticeActivitiesView: React.FC = () => {
                       >
                         {config.label}
                       </span>
+                      {ficha && (
+                        <span className="text-[10px] font-bold text-[#00324D] bg-slate-100 px-2 py-0.5 rounded">
+                          Ficha {ficha.number || act.fichaId}
+                        </span>
+                      )}
                       {course && (
-                        <span className="text-[10px] font-semibold text-[#00324D] bg-slate-100 px-2 py-0.5 rounded">
+                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
                           {course.name || course.code}
                         </span>
                       )}
@@ -362,9 +433,15 @@ export const ApprenticeActivitiesView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Título y Descripción */}
+                  {/* Título y Descripción con apertura de Detalle */}
                   <div>
-                    <h3 className="text-base font-bold text-slate-900 leading-snug">{act.title}</h3>
+                    <h3
+                      onClick={() => handleOpenDetail(act)}
+                      className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#2E8500] transition-colors"
+                      title="Haz clic para ver las instrucciones completas y rúbrica"
+                    >
+                      {act.title}
+                    </h3>
                     <p className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
                       {act.instructions || act.description}
                     </p>
@@ -437,12 +514,21 @@ export const ApprenticeActivitiesView: React.FC = () => {
                   )}
                 </div>
 
-                {/* Botón de Acción */}
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                {/* Botón de Acción — PROMPT 32: Flujo Ver Detalle → Entregar Evidencia */}
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDetail(act)}
+                    className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-slate-500" />
+                    Ver Detalle
+                  </button>
+
                   {sub ? (
-                    <div className="flex items-center justify-between w-full">
-                      <span className="text-[11px] text-slate-400">
-                        Entregado: {sub.submittedAt ? sub.submittedAt.split('T')[0] : 'Hoy'}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400 hidden sm:inline">
+                        {sub.submittedAt ? sub.submittedAt.split('T')[0] : 'Entregado'}
                       </span>
                       <button
                         onClick={() => handleOpenSubmit(act)}
@@ -454,9 +540,10 @@ export const ApprenticeActivitiesView: React.FC = () => {
                   ) : (
                     <button
                       onClick={() => handleOpenSubmit(act)}
-                      className="w-full py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      disabled={activeBlock?.blocked}
+                      className="px-3.5 py-1.5 bg-[#39A900] hover:bg-[#2E8500] disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
                     >
-                      <Upload className="w-4 h-4" />
+                      <Upload className="w-3.5 h-3.5" />
                       Entregar Evidencia
                     </button>
                   )}
@@ -465,6 +552,34 @@ export const ApprenticeActivitiesView: React.FC = () => {
             );
           })}
         </div>
+      )}
+
+      {/* Modal: Consulta Detallada de Actividad (PROMPT 32: Ver Detalle) */}
+      {detailActivity && (
+        <ActivityDetailModal
+          isOpen={detailModalOpen}
+          onClose={() => {
+            setDetailModalOpen(false);
+            setDetailActivity(null);
+          }}
+          activity={detailActivity}
+          submission={getSubmissionForActivity(detailActivity.id)}
+          ficha={fichasMap[detailActivity.fichaId]}
+          learningOutcome={learningOutcomes.find((r) => r.id === detailActivity.learningOutcomeId)}
+          rubric={rubricsMap[detailActivity.id]}
+          onOpenSubmit={() => {
+            setDetailModalOpen(false);
+            handleOpenSubmit(detailActivity);
+          }}
+          onOpenRubric={() => {
+            if (rubricsMap[detailActivity.id]) {
+              setSelectedRubric(rubricsMap[detailActivity.id]);
+              setRubricModalOpen(true);
+            }
+          }}
+          isBlocked={activeBlock?.blocked}
+          blockReason={activeBlock?.reason}
+        />
       )}
 
       {/* Modal: Formulario de Entrega de Evidencia */}

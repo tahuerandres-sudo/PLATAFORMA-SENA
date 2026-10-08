@@ -74,14 +74,14 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
     async function loadEnrollment() {
       if (!learnerId) return;
       try {
-        const enr = await enrollmentService.getEnrollmentByLearnerId(learnerId);
+        const enr = await enrollmentService.getEnrollmentByLearnerId(learnerId, learnerEmail);
         if (enr) setEnrollment(enr);
       } catch (err) {
         console.warn('[SubmissionForm] Error cargando matrícula:', err);
       }
     }
     loadEnrollment();
-  }, [learnerId]);
+  }, [learnerId, learnerEmail]);
 
   // Verificar si el aprendiz tiene restricción para subir evidencias (Requisito 19)
   useEffect(() => {

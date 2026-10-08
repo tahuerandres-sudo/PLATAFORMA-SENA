@@ -76,6 +76,7 @@ function AppContent() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [accessDeniedWarning, setAccessDeniedWarning] = useState<string | null>(null);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
+  const [selectedRelatedId, setSelectedRelatedId] = useState<string | null>(null);
 
   const userId = userProfile?.uid || currentUser?.uid || '';
 
@@ -179,7 +180,7 @@ function AppContent() {
   }, [isAuthenticated, userProfile]);
 
   // Manejar intento de acceso a vistas protegidas por rol
-  const handleNavigate = (viewId: string) => {
+  const handleNavigate = (viewId: string, relatedId?: string) => {
     setAccessDeniedWarning(null);
 
     // Lista de vistas exclusivas del instructor (PROMPT 22: Fichas ahora es común a ambos roles)
@@ -213,6 +214,7 @@ function AppContent() {
       setSelectedFichaInfo(null);
     }
 
+    setSelectedRelatedId(relatedId || null);
     setActiveView(targetView);
   };
 
@@ -444,7 +446,9 @@ function AppContent() {
               {activeView === 'fichas' && (
                 <ApprenticeFichasView onNavigateToView={handleNavigate} />
               )}
-              {activeView === 'activities' && <ApprenticeActivitiesView />}
+              {activeView === 'activities' && (
+                <ApprenticeActivitiesView initialActivityId={selectedRelatedId || undefined} />
+              )}
               {activeView === 'calendar' && (
                 <ApprenticeCalendarView
                   onNavigateToActivities={(activityId) => handleNavigate('activities')}

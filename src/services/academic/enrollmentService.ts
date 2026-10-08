@@ -610,34 +610,73 @@ export const enrollmentService = {
     if (!learnerId && !learnerEmail) return [];
     try {
       const map = new Map<string, Enrollment>();
+      const normEmail = learnerEmail ? learnerEmail.trim().toLowerCase() : '';
+
+      // 1. Sincronizar desde memoria si existe
+      inMemoryEnrollments.forEach((e) => {
+        const matchesLearner =
+          (learnerId && (e.userId === learnerId || e.learnerId === learnerId || e.apprenticeId === learnerId)) ||
+          (normEmail && e.learnerEmail?.toLowerCase() === normEmail);
+        if (matchesLearner && e.status !== 'withdrawn' && (e.status as any) !== 'removed') {
+          map.set(e.id, e);
+        }
+      });
 
       if (learnerId) {
+        // userId
         const q1 = query(
           collection(db, COLLECTION),
-          where('userId', '==', learnerId),
-          where('status', '==', 'active')
+          where('userId', '==', learnerId)
         );
         const s1 = await getDocs(q1);
-        s1.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Enrollment));
+        s1.docs.forEach((d) => {
+          const item = { id: d.id, ...d.data() } as Enrollment;
+          if (item.status !== 'withdrawn' && (item.status as any) !== 'removed') {
+            map.set(d.id, item);
+          }
+        });
 
+        // learnerId
         const q2 = query(
           collection(db, COLLECTION),
-          where('learnerId', '==', learnerId),
-          where('status', '==', 'active')
+          where('learnerId', '==', learnerId)
         );
         const s2 = await getDocs(q2);
-        s2.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Enrollment));
+        s2.docs.forEach((d) => {
+          const item = { id: d.id, ...d.data() } as Enrollment;
+          if (item.status !== 'withdrawn' && (item.status as any) !== 'removed') {
+            map.set(d.id, item);
+          }
+        });
+
+        // apprenticeId
+        try {
+          const q3 = query(
+            collection(db, COLLECTION),
+            where('apprenticeId', '==', learnerId)
+          );
+          const s3 = await getDocs(q3);
+          s3.docs.forEach((d) => {
+            const item = { id: d.id, ...d.data() } as Enrollment;
+            if (item.status !== 'withdrawn' && (item.status as any) !== 'removed') {
+              map.set(d.id, item);
+            }
+          });
+        } catch {}
       }
 
-      if (learnerEmail) {
-        const norm = learnerEmail.trim().toLowerCase();
+      if (normEmail) {
         const qEmail = query(
           collection(db, COLLECTION),
-          where('learnerEmail', '==', norm),
-          where('status', '==', 'active')
+          where('learnerEmail', '==', normEmail)
         );
         const sEmail = await getDocs(qEmail);
-        sEmail.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Enrollment));
+        sEmail.docs.forEach((d) => {
+          const item = { id: d.id, ...d.data() } as Enrollment;
+          if (item.status !== 'withdrawn' && (item.status as any) !== 'removed') {
+            map.set(d.id, item);
+          }
+        });
       }
 
       return Array.from(map.values());
