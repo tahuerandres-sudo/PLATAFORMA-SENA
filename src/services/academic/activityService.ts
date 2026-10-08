@@ -26,8 +26,19 @@ import { submissionService } from '../submissions/submissionService';
 import { notificationService } from './notificationService';
 import { fichaService } from './fichaService';
 import { enrollmentService } from './enrollmentService';
+import { getEnrollmentsForApprentice } from '../firebase/academicService';
 
 const ACTIVITIES_COLLECTION = FIRESTORE_COLLECTIONS.ACTIVITIES;
+
+function cleanUndefined<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
+}
 
 // Almacén en memoria sincronizado para que las nuevas actividades creadas se reflejen en la sesión inmediatamente
 let inMemoryActivities: EvidenceActivity[] = [];
@@ -176,15 +187,16 @@ export const activityService = {
     }
 
     try {
-      // 1. Obtener todas las matrículas activas del aprendiz
-      const enrollments = await enrollmentService.getLearnerEnrollments(learnerId, learnerEmail);
-      if (enrollments.length === 0) {
-        return { data: [], isDemo: false, fichaIds: [] };
-      }
+      // 1. Obtener todas las matrículas del aprendiz desde ambos servicios
+      const [enrList1, enrList2] = await Promise.all([
+        enrollmentService.getLearnerEnrollments(learnerId, learnerEmail).catch(() => []),
+        getEnrollmentsForApprentice(learnerId, learnerEmail).catch(() => []),
+      ]);
 
-      // 2. Extraer fichas únicas del aprendiz (resolviendo tanto documentId como number)
       const allowedFichaIdSet = new Set<string>();
-      for (const enr of enrollments) {
+
+      // Procesar enrList1
+      for (const enr of enrList1) {
         if (enr.fichaId) {
           allowedFichaIdSet.add(enr.fichaId);
           try {
@@ -193,6 +205,15 @@ export const activityService = {
             if (f?.number) allowedFichaIdSet.add(f.number);
           } catch {}
         }
+      }
+
+      // Procesar enrList2
+      for (const enr of enrList2) {
+        if (enr.fichaId) {
+          allowedFichaIdSet.add(enr.fichaId);
+        }
+        if (enr.ficha?.id) allowedFichaIdSet.add(enr.ficha.id);
+        if (enr.ficha?.number) allowedFichaIdSet.add(enr.ficha.number);
       }
 
       // Comprobar también perfil de usuario por si tiene ficha asignada directamente
@@ -218,7 +239,7 @@ export const activityService = {
         return { data: [], isDemo: false, fichaIds: [] };
       }
 
-      // 3. Consultar las actividades de cada ficha
+      // 2. Consultar las actividades de cada ficha
       const actMap = new Map<string, EvidenceActivity>();
 
       // Firestore queries por cada fichaId relevante
@@ -247,7 +268,10 @@ export const activityService = {
           allSnap.docs.forEach((d) => {
             const act = d.data() as EvidenceActivity;
             const actId = act.id || d.id;
-            if (act.status !== 'draft' && fichaIdsArray.includes(act.fichaId)) {
+            const matchesFicha =
+              fichaIdsArray.includes(act.fichaId) ||
+              ((act as any).fichaIds && (act as any).fichaIds.some((fid: string) => fichaIdsArray.includes(fid)));
+            if (act.status !== 'draft' && matchesFicha) {
               actMap.set(actId, { ...act, id: actId });
             }
           });
@@ -256,7 +280,10 @@ export const activityService = {
 
       // Sincronizar con inMemoryActivities
       inMemoryActivities.forEach((a) => {
-        if (a.status !== 'draft' && fichaIdsArray.includes(a.fichaId)) {
+        const matchesFicha =
+          fichaIdsArray.includes(a.fichaId) ||
+          ((a as any).fichaIds && (a as any).fichaIds.some((fid: string) => fichaIdsArray.includes(fid)));
+        if (a.status !== 'draft' && matchesFicha) {
           if (!actMap.has(a.id)) {
             actMap.set(a.id, a);
           }
@@ -322,11 +349,12 @@ export const activityService = {
       inMemoryActivities = [updatedActivity, ...inMemoryActivities];
     }
 
-    // Persistir en Firestore
+    // Persistir en Firestore sanitizando valores undefined
     try {
-      await setDoc(doc(db, ACTIVITIES_COLLECTION, activity.id), updatedActivity);
+      await setDoc(doc(db, ACTIVITIES_COLLECTION, activity.id), cleanUndefined(updatedActivity));
     } catch (err) {
-      console.warn('[activityService] Aviso guardando actividad en Firestore:', err);
+      console.warn('[activityService] Error guardando actividad en Firestore:', err);
+      throw err;
     }
 
     // PROMPT 13 & 16 - Notificar a aprendices de la ficha cuando la actividad se publica o actualiza

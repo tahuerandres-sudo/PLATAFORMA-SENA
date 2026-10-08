@@ -31,6 +31,16 @@ import { gamificationService } from '../academic/gamificationService';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.SUBMISSIONS;
 
+function cleanUndefined<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const key in obj) {
+    if (obj[key] !== undefined) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
+}
+
 // Almacén en memoria sincronizado para que las entregas creadas en la sesión se vean en tiempo real
 let inMemorySubmissions: AcademicSubmission[] = [];
 
@@ -109,7 +119,7 @@ export const submissionService = {
 
     // 2. Persistir en Cloud Firestore (/submissions/{submissionId})
     try {
-      await setDoc(doc(db, COLLECTION, id), fullSubmission);
+      await setDoc(doc(db, COLLECTION, id), cleanUndefined(fullSubmission));
     } catch (err) {
       console.warn(
         '[submissionService] Aviso al escribir en Firestore (se conserva en memoria de sesión):',

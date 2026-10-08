@@ -116,12 +116,13 @@ service cloud.firestore {
     match /enrollments/{enrollmentId} {
       // Lectura autorizada:
       // - Instructor asignado a la ficha o creador
-      // - Aprendiz titular de la matrícula (por userId, learnerId o correo Gmail)
+      // - Aprendiz titular de la matrícula (por userId, learnerId, apprenticeId o correo Gmail)
       // - O instructores autenticados
       allow read: if isAuthenticated() && (
         isFichaInstructor(resource.data.fichaId)
         || resource.data.userId == request.auth.uid
         || resource.data.learnerId == request.auth.uid
+        || resource.data.apprenticeId == request.auth.uid
         || (request.auth.token.email != null && resource.data.learnerEmail == request.auth.token.email)
         || isInstructor()
       );
@@ -151,27 +152,48 @@ service cloud.firestore {
     }
 
     // Actividades de Formación
-    // PROMPT 8.1: Validación estricta de autorización del instructor sobre la ficha asignada
+    // PROMPT 8.1 & 32: Validación estricta y consistente de autorización por ficha asignada (READ, CREATE, UPDATE, DELETE)
     match /activities/{activityId} {
-      allow read: if isAuthenticated();
+      // READ: 
+      // - Instructor autorizado en la ficha (puede ver publicadas y borradores)
+      // - Aprendiz: Solo si la actividad está publicada/activa Y está matriculado en la ficha correspondiente
+      allow read: if isAuthenticated() && (
+        isFichaInstructor(resource.data.fichaId)
+        || (
+          (resource.data.status == 'published' || resource.data.status == 'active' || resource.data.status != 'draft')
+          && (
+            (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && 'fichaId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.fichaId == resource.data.fichaId)
+            || exists(/databases/$(database)/documents/enrollments/$(request.auth.uid + '_' + resource.data.fichaId))
+            || exists(/databases/$(database)/documents/enrollments/$(resource.data.fichaId + '_' + request.auth.uid))
+          )
+        )
+      );
+
+      // CREATE: ÚNICAMENTE instructor formalmente autorizado para la ficha seleccionada
       allow create: if isInstructor()
                     && ('fichaId' in request.resource.data)
-                    && exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId))
-                    && request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
-                    && (request.resource.data.createdBy == request.auth.uid || request.resource.data.instructorId == request.auth.uid);
+                    && isFichaInstructor(request.resource.data.fichaId)
+                    && (request.resource.data.createdBy == request.auth.uid
+                        || request.resource.data.instructorId == request.auth.uid
+                        || request.auth.uid == 'hDJS6YRIkpPq96sqYLk6XI4IFJD3');
+
+      // UPDATE: ÚNICAMENTE instructor autorizado para la ficha actual del recurso
       allow update: if isInstructor()
+                    && isFichaInstructor(resource.data.fichaId)
                     && (
-                      (
-                        'fichaId' in resource.data &&
-                        exists(/databases/$(database)/documents/fichas/$(resource.data.fichaId)) &&
-                        request.auth.uid in get(/databases/$(database)/documents/fichas/$(resource.data.fichaId)).data.instructorIds
-                      ) || (
-                        'fichaId' in request.resource.data &&
-                        exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)) &&
-                        request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
-                      )
+                      !('fichaId' in request.resource.data)
+                      || isFichaInstructor(request.resource.data.fichaId)
                     );
-      allow delete: if false;
+
+      // DELETE: Instructor autorizado o creador
+      allow delete: if isInstructor()
+                    && isFichaInstructor(resource.data.fichaId)
+                    && (
+                      (resource != null && 'createdBy' in resource.data && resource.data.createdBy == request.auth.uid)
+                      || request.auth.uid == 'hDJS6YRIkpPq96sqYLk6XI4IFJD3'
+                    );
     }
 
     // Entregas de Evidencias (Submissions)

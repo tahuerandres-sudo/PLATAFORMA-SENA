@@ -40,7 +40,7 @@ import { trackingService } from '../../services/academic/trackingService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
 import { fichaService } from '../../services/academic/fichaService';
 import { learningOutcomeService } from '../../services/academic/learningOutcomeService';
-import { getCourses } from '../../services/firebase/academicService';
+import { getCourses, getEnrollmentsForApprentice } from '../../services/firebase/academicService';
 import { getEvidenceTypeConfig } from '../../config/fileLimits';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
@@ -104,17 +104,26 @@ export const ApprenticeActivitiesView: React.FC<ApprenticeActivitiesViewProps> =
       }
 
       // Consulta de actividades autorizadas directamente por ficha de matrícula (PROMPT 32)
-      const [actsRes, subRes, blockRes, enrList, rapsRes, coursesList] = await Promise.all([
+      const [actsRes, subRes, blockRes, enrList1, enrList2, rapsRes, coursesList] = await Promise.all([
         activityService.getActivitiesForLearner(learnerId, learnerEmail),
         submissionService.getSubmissionsByLearner(learnerId),
         trackingService.checkLearnerHasEvidenceBlock(learnerId),
-        enrollmentService.getLearnerEnrollments(learnerId, learnerEmail),
+        enrollmentService.getLearnerEnrollments(learnerId, learnerEmail).catch(() => []),
+        getEnrollmentsForApprentice(learnerId, learnerEmail).catch(() => []),
         learningOutcomeService.getLearningOutcomes(),
         getCourses(),
       ]);
 
-      const primaryEnr = enrList[0] || null;
-      setEnrollments(enrList);
+      // Unificar matrículas detectadas por ambos mecanismos
+      const mergedEnrMap = new Map<string, Enrollment>();
+      enrList1.forEach((e) => mergedEnrMap.set(e.id, e));
+      enrList2.forEach((e) => {
+        if (!mergedEnrMap.has(e.id)) mergedEnrMap.set(e.id, e);
+      });
+      const combinedEnrList = Array.from(mergedEnrMap.values());
+
+      const primaryEnr = combinedEnrList[0] || null;
+      setEnrollments(combinedEnrList);
       setEnrollment(primaryEnr);
       setLearningOutcomes(rapsRes.data || []);
       setCourses(coursesList || []);
@@ -124,12 +133,22 @@ export const ApprenticeActivitiesView: React.FC<ApprenticeActivitiesViewProps> =
       setSubmissions(subRes.data || []);
       setActiveBlock(blockRes.blocked ? blockRes : null);
 
+      console.log('[FINAL ACTIVITY TEST]', {
+        authUid: learnerId,
+        authEmail: learnerEmail,
+        enrollmentFichaIds: combinedEnrList.map((e) => e.fichaId),
+        activitiesFetched: visibleActivities.length,
+        activitiesPublished: visibleActivities.filter((a) => a.status === 'published').length,
+        activitiesVisible: visibleActivities.map((a) => a.id),
+      });
+
       // Cargar información de fichas involucradas
       const fMap: Record<string, Ficha> = {};
       const uniqueFichaIds = Array.from(
         new Set([
           ...visibleActivities.map((a) => a.fichaId).filter(Boolean),
-          ...enrList.map((e) => e.fichaId).filter(Boolean),
+          ...combinedEnrList.map((e) => e.fichaId).filter(Boolean),
+          ...(userProfile?.fichaId ? [userProfile.fichaId] : []),
         ])
       );
       for (const fId of uniqueFichaIds) {
@@ -193,10 +212,9 @@ export const ApprenticeActivitiesView: React.FC<ApprenticeActivitiesViewProps> =
 
   const filteredActivities = activities.filter((act) => {
     const sub = getSubmissionForActivity(act.id);
-    const hasSubmission = !!sub;
     const isGraded = sub && (sub.status === 'approved' || sub.status === 'not_approved');
     const isSubmitted = sub && (sub.status === 'submitted' || sub.status === 'under_review');
-    const isPending = !hasSubmission || sub?.status === 'correction_required';
+    const isPending = !sub || sub.status === 'correction_required' || sub.status === 'pending' || (sub.status as any) === 'draft';
 
     if (activeTab === 'pending' && !isPending) return false;
     if (activeTab === 'submitted' && !isSubmitted) return false;
@@ -235,7 +253,7 @@ export const ApprenticeActivitiesView: React.FC<ApprenticeActivitiesViewProps> =
   // Contadores para pestañas
   const pendingCount = activities.filter((a) => {
     const s = getSubmissionForActivity(a.id);
-    return !s || s.status === 'correction_required';
+    return !s || s.status === 'correction_required' || s.status === 'pending' || (s.status as any) === 'draft';
   }).length;
 
   const submittedCount = activities.filter((a) => {

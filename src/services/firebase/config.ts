@@ -57,6 +57,7 @@ try {
   firestoreInstance = initializeFirestore(app, {
     localCache: memoryLocalCache(),
     experimentalForceLongPolling: true,
+    ignoreUndefinedProperties: true,
   });
 } catch {
   firestoreInstance = getFirestore(app);
