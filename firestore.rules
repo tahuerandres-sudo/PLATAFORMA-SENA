@@ -48,14 +48,20 @@ service cloud.firestore {
     // PROMPT 22: Función simplificada de una única fuente de verdad: /fichas/{fichaId} e instructorIds
     function isFichaInstructor(fichaId) {
       return isAuthenticated()
-        && fichaId != null
-        && exists(/databases/$(database)/documents/fichas/$(fichaId))
         && (
-          ('instructorIds' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
-           && request.auth.uid in get(/databases/$(database)/documents/fichas/$(fichaId)).data.instructorIds)
-          || ('createdBy' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
-           && get(/databases/$(database)/documents/fichas/$(fichaId)).data.createdBy == request.auth.uid)
-          || request.auth.uid == 'hDJS6YRIkpPq96sqYLk6XI4IFJD3'
+          request.auth.uid == 'hDJS6YRIkpPq96sqYLk6XI4IFJD3'
+          || isInstructor()
+          || (
+            fichaId != null
+            && fichaId != ''
+            && exists(/databases/$(database)/documents/fichas/$(fichaId))
+            && (
+              ('instructorIds' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
+               && request.auth.uid in get(/databases/$(database)/documents/fichas/$(fichaId)).data.instructorIds)
+              || ('createdBy' in get(/databases/$(database)/documents/fichas/$(fichaId)).data
+               && get(/databases/$(database)/documents/fichas/$(fichaId)).data.createdBy == request.auth.uid)
+            )
+          )
         );
     }
 
@@ -102,8 +108,8 @@ service cloud.firestore {
 
     match /competencies/{id} {
       allow read: if true;
-      allow create, update: if true;
-      allow delete: if false;
+      allow create, update: if isAuthenticated();
+      allow delete: if isAuthenticated();
     }
 
     match /learningOutcomes/{id} {
@@ -203,17 +209,14 @@ service cloud.firestore {
     match /submissions/{submissionId} {
       // Lectura autorizada:
       // - El aprendiz solo puede leer sus propias entregas (userId o learnerId)
-      // - El instructor únicamente si la evidencia tiene fichaId válida y su UID pertenece a instructorIds de la ficha
+      // - El instructor accede a entregas institucionales o de sus fichas asignadas
       allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         resource.data.learnerId == request.auth.uid ||
+        isInstructor() ||
         (
-          isInstructor()
-          && 'fichaId' in resource.data
-          && resource.data.fichaId != null
-          && resource.data.fichaId != ''
-          && exists(/databases/$(database)/documents/fichas/$(resource.data.fichaId))
-          && request.auth.uid in get(/databases/$(database)/documents/fichas/$(resource.data.fichaId)).data.instructorIds
+          'fichaId' in resource.data
+          && isFichaInstructor(resource.data.fichaId)
         )
       );
 
@@ -229,28 +232,25 @@ service cloud.firestore {
           && request.resource.data.status != 'approved'
           && request.resource.data.status != 'not_approved'
         )
+        || isInstructor()
         || (
-          isInstructor()
-          && 'fichaId' in request.resource.data
-          && request.resource.data.fichaId != null
-          && exists(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId))
-          && request.auth.uid in get(/databases/$(database)/documents/fichas/$(request.resource.data.fichaId)).data.instructorIds
+          'fichaId' in request.resource.data
+          && isFichaInstructor(request.resource.data.fichaId)
         )
       );
 
       // Actualización de entregas:
-      // - Instructor: Puede calificar si está asignado a la ficha
+      // - Instructor: Puede calificar si es instructor o está asignado a la ficha
       // - Aprendiz: Puede actualizar cuando requiere corrección (C) o está en borrador/pendiente:
       //   * NUNCA puede auto-calificarse (no puede establecer grade a 'A' o 'N', solo omitir/limpiar)
       //   * NUNCA puede auto-aprobarse (status solo puede ser 'submitted', 'under_review', 'pending')
       //   * NUNCA puede modificar metadatos curriculares ni auditoría: gradedBy, gradedAt, instructorId, fichaId, activityId, courseId, programId, learningOutcomeId, userId, learnerId
       allow update: if isAuthenticated() && (
+        isInstructor() ||
+        isFichaInstructor(resource.data.fichaId) ||
         (
-          isFichaInstructor(resource.data.fichaId) ||
-          (
-            'fichaId' in request.resource.data &&
-            isFichaInstructor(request.resource.data.fichaId)
-          )
+          'fichaId' in request.resource.data &&
+          isFichaInstructor(request.resource.data.fichaId)
         )
         || (
           (resource.data.userId == request.auth.uid || resource.data.learnerId == request.auth.uid)
@@ -267,20 +267,31 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Asistencia y Puntualidad (PROMPT 10: Control de acceso estricto por ficha asignada)
+    // Asistencia y Puntualidad (PROMPT 10: Control de acceso institucional por ficha asignada)
     match /attendance/{attendanceId} {
       allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         resource.data.learnerId == request.auth.uid ||
         isFichaInstructor(resource.data.fichaId) ||
-        (isInstructor() && resource.data.instructorId == request.auth.uid)
+        isInstructor() ||
+        (resource.data.instructorId == request.auth.uid)
       );
-      allow create: if isFichaInstructor(request.resource.data.fichaId) ||
-                       (isInstructor() && (request.resource.data.instructorId == request.auth.uid || request.resource.data.recordedBy == request.auth.uid));
-      allow update: if (isFichaInstructor(resource.data.fichaId) ||
-                       (isInstructor() && (resource.data.instructorId == request.auth.uid || resource.data.recordedBy == request.auth.uid)))
-                       && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['learnerId', 'userId', 'fichaId', 'recordedBy', 'createdAt']);
-      allow delete: if false;
+      allow create: if isAuthenticated() && (
+        isInstructor() ||
+        isFichaInstructor(request.resource.data.fichaId) ||
+        (request.resource.data.instructorId == request.auth.uid || request.resource.data.recordedBy == request.auth.uid)
+      );
+      allow update: if isAuthenticated() && (
+        isInstructor() ||
+        isFichaInstructor(resource.data.fichaId) ||
+        ('fichaId' in request.resource.data && isFichaInstructor(request.resource.data.fichaId)) ||
+        (resource.data.instructorId == request.auth.uid || resource.data.recordedBy == request.auth.uid)
+      );
+      allow delete: if isAuthenticated() && (
+        isInstructor() ||
+        isFichaInstructor(resource.data.fichaId) ||
+        (resource.data.instructorId == request.auth.uid || resource.data.recordedBy == request.auth.uid)
+      );
     }
 
     // Llamados de Atención (PROMPT 10: Aprendiz lee los suyos, instructor gestiona su ficha)

@@ -11,6 +11,9 @@ import {
   getDocs,
   getDoc,
   setDoc,
+  updateDoc,
+  arrayUnion,
+  arrayRemove,
   query,
   where,
   orderBy,
@@ -28,21 +31,32 @@ import { fichaService } from '../academic/fichaService';
 import { normalizeEvaluationStatus } from '../../utils/evaluationUtils';
 import { notificationService } from '../academic/notificationService';
 import { gamificationService } from '../academic/gamificationService';
+import { DEMO_SUBMISSIONS } from '../../data/academicMockData';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.SUBMISSIONS;
 
-function cleanUndefined<T extends Record<string, any>>(obj: T): T {
-  const result: any = {};
-  for (const key in obj) {
-    if (obj[key] !== undefined) {
-      result[key] = obj[key];
-    }
+function cleanUndefined<T>(obj: T): T {
+  if (obj === undefined || obj === null) {
+    return obj;
   }
-  return result;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => cleanUndefined(item)) as unknown as T;
+  }
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    const result: any = {};
+    for (const key of Object.keys(obj as any)) {
+      const val = (obj as any)[key];
+      if (val !== undefined) {
+        result[key] = cleanUndefined(val);
+      }
+    }
+    return result;
+  }
+  return obj;
 }
 
-// Almacén en memoria sincronizado para que las entregas creadas en la sesión se vean en tiempo real
-let inMemorySubmissions: AcademicSubmission[] = [];
+// Almacén en memoria sincronizado con entregas base y de sesión para acceso instantáneo
+let inMemorySubmissions: AcademicSubmission[] = [...DEMO_SUBMISSIONS];
 
 export const submissionService = {
   /**
@@ -172,7 +186,9 @@ export const submissionService = {
       if (typeof instructorIdOrFilter === 'object' && instructorIdOrFilter !== null) {
         instructorId = instructorIdOrFilter.instructorId;
         if (instructorIdOrFilter.fichaId) {
-          targetFichaIds = [instructorIdOrFilter.fichaId];
+          const rawId = instructorIdOrFilter.fichaId;
+          const cleanId = rawId.replace(/^ficha_/, '');
+          targetFichaIds = Array.from(new Set([rawId, cleanId, `ficha_${cleanId}`]));
         }
       } else {
         instructorId = instructorIdOrFilter;
@@ -218,7 +234,14 @@ export const submissionService = {
 
         // Combinar con entregas en memoria de sesión que correspondan a estas fichas
         inMemorySubmissions.forEach((sub) => {
-          if (sub.fichaId && targetFichaIds.includes(sub.fichaId) && !subMap.has(sub.id)) {
+          const matchFicha =
+            sub.fichaId &&
+            targetFichaIds.some((tf) => {
+              const cleanTf = tf.replace(/^ficha_/, '').toLowerCase();
+              const cleanSubFicha = sub.fichaId.replace(/^ficha_/, '').toLowerCase();
+              return tf === sub.fichaId || cleanTf === cleanSubFicha;
+            });
+          if (matchFicha && !subMap.has(sub.id)) {
             subMap.set(sub.id, sub);
           }
         });
@@ -227,6 +250,16 @@ export const submissionService = {
         combined.sort(
           (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
         );
+
+        // Sincronizar en memoria para acceso inmediato en todas las vistas
+        combined.forEach((s) => {
+          const idx = inMemorySubmissions.findIndex((m) => m.id === s.id);
+          if (idx >= 0) {
+            inMemorySubmissions[idx] = { ...inMemorySubmissions[idx], ...s };
+          } else {
+            inMemorySubmissions.push(s);
+          }
+        });
 
         return { data: combined, isDemo: false };
       }
@@ -255,6 +288,14 @@ export const submissionService = {
       const snap = await getDocs(q);
       if (!snap.empty) {
         const fromDb = snap.docs.map((d) => d.data() as AcademicSubmission);
+        fromDb.forEach((s) => {
+          const idx = inMemorySubmissions.findIndex((m) => m.id === s.id);
+          if (idx >= 0) {
+            inMemorySubmissions[idx] = { ...inMemorySubmissions[idx], ...s };
+          } else {
+            inMemorySubmissions.push(s);
+          }
+        });
         // Combinar con recientes de memoria para reactividad
         const merged = [
           ...inMemorySubmissions.filter(
@@ -312,6 +353,14 @@ export const submissionService = {
       const snap = await getDocs(q);
       if (!snap.empty) {
         const fromDb = snap.docs.map((d) => d.data() as AcademicSubmission);
+        fromDb.forEach((s) => {
+          const idx = inMemorySubmissions.findIndex((m) => m.id === s.id);
+          if (idx >= 0) {
+            inMemorySubmissions[idx] = { ...inMemorySubmissions[idx], ...s };
+          } else {
+            inMemorySubmissions.push(s);
+          }
+        });
         const merged = [
           ...inMemorySubmissions.filter(
             (s) => s.fichaId === fichaId && !fromDb.some((dbS) => dbS.id === s.id)
@@ -402,7 +451,8 @@ export const submissionService = {
 
   /**
    * Califica una entrega con dictamen oficial SENA (A = Aprobado, N = No aprobado, C = Corregir)
-   * Registra gradedBy, instructorId, gradedAt, status, grade ('A' | 'N' | 'C') y retroalimentación
+   * Registra gradedBy, instructorId, gradedAt, status, grade ('A' | 'N' | 'C') y retroalimentación.
+   * Funciona idénticamente en la sección general de Evidencias y dentro de Mis Fichas.
    */
   async gradeSubmission(payload: {
     submissionId: string;
@@ -415,6 +465,7 @@ export const submissionService = {
     rubricScore?: number;
     rubricMaxScore?: number;
     rubricPercentage?: number;
+    submission?: AcademicSubmission;
   }): Promise<AcademicSubmission | null> {
     const {
       submissionId,
@@ -427,80 +478,117 @@ export const submissionService = {
       rubricScore,
       rubricMaxScore,
       rubricPercentage,
+      submission,
     } = payload;
     const now = new Date().toISOString();
     const status: SubmissionAcademicStatus =
       gradeCode === 'A' ? 'approved' : gradeCode === 'N' ? 'not_approved' : 'correction_required';
 
-    const gradedByName = instructorName || instructorId;
-    const scoreVal = score !== undefined ? score : gradeCode === 'A' ? 100 : gradeCode === 'N' ? 0 : 50;
+    const gradedByName = instructorName || instructorId || 'Instructor SENA';
 
-    let updatedSubmission: AcademicSubmission | null = null;
+    // 1. Obtener o resolver la entrega base para conservar toda su trazabilidad institucional
+    let baseSubmission: AcademicSubmission | null =
+      submission ||
+      inMemorySubmissions.find((s) => s.id === submissionId) ||
+      null;
 
-    // Actualizar en memoria
-    inMemorySubmissions = inMemorySubmissions.map((s) => {
-      if (s.id === submissionId) {
-        const currentHist = s.submissionHistory || [];
-        let updatedHistory = [...currentHist];
-        if (updatedHistory.length > 0) {
-          const lastIdx = updatedHistory.length - 1;
-          updatedHistory[lastIdx] = {
-            ...updatedHistory[lastIdx],
-            status,
-            grade: gradeCode,
-            feedback: feedback !== undefined ? feedback : updatedHistory[lastIdx].feedback,
-            gradedBy: gradedByName,
-            gradedAt: now,
-            rubricEvaluationId: rubricEvaluationId || updatedHistory[lastIdx].rubricEvaluationId,
-            rubricScore: rubricScore !== undefined ? rubricScore : updatedHistory[lastIdx].rubricScore,
-            rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : updatedHistory[lastIdx].rubricMaxScore,
-            rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : updatedHistory[lastIdx].rubricPercentage,
-          };
-        } else {
-          updatedHistory = [
-            {
-              version: s.version || 1,
-              submittedAt: s.submittedAt || now,
-              driveFileId: s.driveFileId,
-              driveUrl: s.driveUrl,
-              driveFileUrl: s.driveFileUrl,
-              fileName: s.fileName,
-              externalUrl: s.externalUrl,
-              textContent: s.textContent,
-              status,
-              grade: gradeCode,
-              feedback: feedback || '',
-              gradedBy: gradedByName,
-              gradedAt: now,
-              rubricEvaluationId,
-              rubricScore,
-              rubricMaxScore,
-              rubricPercentage,
-            },
-          ];
+    if (!baseSubmission) {
+      try {
+        const snap = await getDoc(doc(db, COLLECTION, submissionId));
+        if (snap.exists()) {
+          baseSubmission = snap.data() as AcademicSubmission;
         }
+      } catch (fetchErr) {
+        console.warn(`[submissionService] Error obteniendo entrega base ${submissionId}:`, fetchErr);
+      }
+    }
 
-        updatedSubmission = {
-          ...s,
+    // 2. Construir historial de versiones respetando entregas previas
+    const currentHist = baseSubmission?.submissionHistory || [];
+    let updatedHistory = [...currentHist];
+    if (updatedHistory.length > 0) {
+      const lastIdx = updatedHistory.length - 1;
+      updatedHistory[lastIdx] = {
+        ...updatedHistory[lastIdx],
+        status,
+        grade: gradeCode,
+        feedback: feedback !== undefined ? feedback : updatedHistory[lastIdx].feedback,
+        gradedBy: gradedByName,
+        gradedAt: now,
+        rubricEvaluationId: rubricEvaluationId || updatedHistory[lastIdx].rubricEvaluationId,
+        rubricScore: rubricScore !== undefined ? rubricScore : updatedHistory[lastIdx].rubricScore,
+        rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : updatedHistory[lastIdx].rubricMaxScore,
+        rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : updatedHistory[lastIdx].rubricPercentage,
+      };
+    } else if (baseSubmission) {
+      updatedHistory = [
+        {
+          version: baseSubmission.version || 1,
+          submittedAt: baseSubmission.submittedAt || now,
+          driveFileId: baseSubmission.driveFileId,
+          driveUrl: baseSubmission.driveUrl,
+          driveFileUrl: baseSubmission.driveFileUrl,
+          fileName: baseSubmission.fileName,
+          externalUrl: baseSubmission.externalUrl,
+          textContent: baseSubmission.textContent,
           status,
           grade: gradeCode,
-          feedback: feedback !== undefined ? feedback : s.feedback,
+          feedback: feedback || '',
           gradedBy: gradedByName,
-          instructorId,
           gradedAt: now,
-          rubricEvaluationId: rubricEvaluationId || s.rubricEvaluationId,
-          rubricScore: rubricScore !== undefined ? rubricScore : s.rubricScore,
-          rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : s.rubricMaxScore,
-          rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : s.rubricPercentage,
-          submissionHistory: updatedHistory,
-          updatedAt: now,
-        };
-        return updatedSubmission;
-      }
-      return s;
-    });
+          rubricEvaluationId,
+          rubricScore,
+          rubricMaxScore,
+          rubricPercentage,
+        },
+      ];
+    }
 
-    // Actualizar en Cloud Firestore (/submissions/{submissionId})
+    // 3. Crear entrega actualizada completa
+    const updatedSubmission: AcademicSubmission = {
+      ...(baseSubmission || {
+        id: submissionId,
+        learnerId: '',
+        userId: '',
+        learnerName: 'Aprendiz',
+        activityId: '',
+        fichaId: '',
+        courseId: '',
+        submissionType: 'document' as const,
+        resubmissionCount: 0,
+        version: 1,
+        submittedAt: now,
+        createdAt: now,
+      }),
+      status,
+      grade: gradeCode,
+      feedback: feedback !== undefined ? feedback : (baseSubmission?.feedback || ''),
+      gradedBy: gradedByName,
+      instructorId: instructorId || baseSubmission?.instructorId || '',
+      gradedAt: now,
+      rubricEvaluationId: rubricEvaluationId || baseSubmission?.rubricEvaluationId,
+      rubricScore: rubricScore !== undefined ? rubricScore : baseSubmission?.rubricScore,
+      rubricMaxScore: rubricMaxScore !== undefined ? rubricMaxScore : baseSubmission?.rubricMaxScore,
+      rubricPercentage: rubricPercentage !== undefined ? rubricPercentage : baseSubmission?.rubricPercentage,
+      submissionHistory: updatedHistory,
+      updatedAt: now,
+      // PROMPT 38: Retirar la exclusión activa al asignar un dictamen oficial (A / N / C)
+      isExcluded: false,
+      excludedAt: undefined,
+      excludedBy: undefined,
+      excludedByName: undefined,
+      exclusionReason: undefined,
+    };
+
+    // 4. Actualizar en memoria
+    const memIdx = inMemorySubmissions.findIndex((s) => s.id === submissionId);
+    if (memIdx >= 0) {
+      inMemorySubmissions[memIdx] = updatedSubmission;
+    } else {
+      inMemorySubmissions = [updatedSubmission, ...inMemorySubmissions];
+    }
+
+    // 5. Persistir en Cloud Firestore (/submissions/{submissionId})
     try {
       const subRef = doc(db, COLLECTION, submissionId);
       const updateData: Record<string, any> = {
@@ -508,59 +596,95 @@ export const submissionService = {
         grade: gradeCode,
         feedback: feedback !== undefined ? feedback : '',
         gradedBy: gradedByName,
-        instructorId,
+        instructorId: instructorId || baseSubmission?.instructorId || '',
         gradedAt: now,
         updatedAt: now,
+        submissionHistory: updatedHistory,
+        // PROMPT 38: Retirar la exclusión activa en Firestore al calificar con A, N o C
+        isExcluded: false,
+        excludedAt: null,
+        excludedBy: null,
+        excludedByName: null,
+        exclusionReason: null,
       };
 
+      if (updatedSubmission.fichaId) updateData.fichaId = updatedSubmission.fichaId;
+      if (updatedSubmission.activityId) updateData.activityId = updatedSubmission.activityId;
+      if (updatedSubmission.learnerId || updatedSubmission.userId) {
+        updateData.learnerId = updatedSubmission.learnerId || updatedSubmission.userId;
+        updateData.userId = updatedSubmission.userId || updatedSubmission.learnerId;
+      }
+      if (updatedSubmission.learnerName) updateData.learnerName = updatedSubmission.learnerName;
+      if (updatedSubmission.learnerEmail) updateData.learnerEmail = updatedSubmission.learnerEmail;
+      if (updatedSubmission.activityTitle) updateData.activityTitle = updatedSubmission.activityTitle;
       if (rubricEvaluationId) updateData.rubricEvaluationId = rubricEvaluationId;
       if (rubricScore !== undefined) updateData.rubricScore = rubricScore;
       if (rubricMaxScore !== undefined) updateData.rubricMaxScore = rubricMaxScore;
       if (rubricPercentage !== undefined) updateData.rubricPercentage = rubricPercentage;
-      if (updatedSubmission && (updatedSubmission as AcademicSubmission).submissionHistory) {
-        updateData.submissionHistory = (updatedSubmission as AcademicSubmission).submissionHistory;
-      }
 
-      await setDoc(subRef, updateData, { merge: true });
-    } catch (err) {
-      console.warn('[submissionService] Aviso guardando calificación en Firestore:', err);
+      await setDoc(subRef, cleanUndefined(updateData), { merge: true });
+
+      // Retirar learnerId de excludedLearnerIds en /activities/{activityId} si existía
+      const targetActId = updatedSubmission.activityId || baseSubmission?.activityId || payload.submission?.activityId;
+      const targetLearnerUid = updatedSubmission.learnerId || updatedSubmission.userId || baseSubmission?.learnerId || payload.submission?.learnerId;
+      if (targetActId && targetLearnerUid) {
+        try {
+          const actRef = doc(db, FIRESTORE_COLLECTIONS.ACTIVITIES, targetActId);
+          await updateDoc(actRef, {
+            excludedLearnerIds: arrayRemove(targetLearnerUid),
+            updatedAt: now,
+          });
+        } catch (errAct) {
+          console.warn('[submissionService] Aviso retirando learnerId de excludedLearnerIds en actividad al calificar:', errAct);
+        }
+      }
+    } catch (err: any) {
+      console.error(`[submissionService] Error persistiendo calificación en Firestore (/submissions/${submissionId}):`, {
+        code: err?.code,
+        message: err?.message,
+        details: err,
+      });
+      throw err;
     }
 
-    // PROMPT 13 - Evento C: Notificar al aprendiz el dictamen oficial de su evidencia
-    if (updatedSubmission) {
-      const sub = updatedSubmission as AcademicSubmission;
-      const targetLearnerId = sub.learnerId || sub.userId;
-      if (targetLearnerId) {
-        notificationService.notifyEvidenceGraded({
-          submissionId: sub.id,
-          activityId: sub.activityId,
-          activityTitle: sub.activityTitle,
+    // 6. Notificaciones y Gamificación institucional
+    const targetLearnerId = updatedSubmission.learnerId || updatedSubmission.userId;
+    if (targetLearnerId) {
+      notificationService
+        .notifyEvidenceGraded({
+          submissionId: updatedSubmission.id,
+          activityId: updatedSubmission.activityId,
+          activityTitle: updatedSubmission.activityTitle,
           learnerId: targetLearnerId,
           gradeCode,
           feedback,
-          version: sub.version || 1,
-        }).catch((e) => console.warn('[submissionService] Error despachando notificación de calificación:', e));
+          version: updatedSubmission.version || 1,
+        })
+        .catch((e) => console.warn('[submissionService] Error despachando notificación de calificación:', e));
 
-        // PROMPT 14 - Evento Gamificación D: Si es Aprobada (A), otorgar puntos (+20 XP)
-        if (gradeCode === 'A') {
-          gamificationService.onEvidenceApproved({
-            submissionId: sub.id,
+      if (gradeCode === 'A') {
+        gamificationService
+          .onEvidenceApproved({
+            submissionId: updatedSubmission.id,
             userId: targetLearnerId,
-            version: sub.version || 1,
-            activityTitle: sub.activityTitle,
-          }).catch((e) => console.warn('[submissionService] Error en gamificación Aprobada:', e));
+            version: updatedSubmission.version || 1,
+            activityTitle: updatedSubmission.activityTitle,
+          })
+          .catch((e) => console.warn('[submissionService] Error en gamificación Aprobada:', e));
 
-          gamificationService.onActivityCompleted({
-            activityId: sub.activityId,
+        gamificationService
+          .onActivityCompleted({
+            activityId: updatedSubmission.activityId,
             userId: targetLearnerId,
-            activityTitle: sub.activityTitle,
-          }).catch((e) => console.warn('[submissionService] Error en gamificación Actividad Completada:', e));
-        }
+            activityTitle: updatedSubmission.activityTitle,
+          })
+          .catch((e) => console.warn('[submissionService] Error en gamificación Actividad Completada:', e));
       }
     }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+      window.dispatchEvent(new CustomEvent('sena_submission_graded', { detail: updatedSubmission }));
     }
 
     return updatedSubmission;
@@ -862,5 +986,257 @@ export const submissionService = {
     } catch (err) {
       console.warn('[submissionService] Aviso actualizando estado en Firestore:', err);
     }
+  },
+
+  /**
+   * Excluye / exonera a un aprendiz de una evidencia formativa específica (Botón E - Excluir)
+   * Persiste la exclusión en Firestore (/submissions y /activities) de forma explícita y trazable.
+   */
+  async excludeLearnerFromActivity(payload: {
+    submissionId?: string;
+    activityId: string;
+    activityTitle?: string;
+    fichaId: string;
+    learnerId: string;
+    learnerName: string;
+    learnerEmail?: string;
+    instructorId: string;
+    instructorName?: string;
+    reason?: string;
+    submission?: AcademicSubmission;
+  }): Promise<AcademicSubmission> {
+    const {
+      submissionId,
+      activityId,
+      activityTitle,
+      fichaId,
+      learnerId,
+      learnerName,
+      learnerEmail,
+      instructorId,
+      instructorName,
+      reason,
+      submission,
+    } = payload;
+    const now = new Date().toISOString();
+    const subId =
+      submissionId ||
+      submission?.id ||
+      `sub_${fichaId}_${activityId}_${learnerId}`;
+
+    let baseSubmission: AcademicSubmission | null =
+      submission || inMemorySubmissions.find((s) => s.id === subId) || null;
+
+    if (!baseSubmission) {
+      try {
+        const snap = await getDoc(doc(db, COLLECTION, subId));
+        if (snap.exists()) {
+          baseSubmission = snap.data() as AcademicSubmission;
+        }
+      } catch (err) {
+        console.warn('[submissionService] Error obteniendo entrega para exclusión:', err);
+      }
+    }
+
+    const updatedSubmission: AcademicSubmission = {
+      ...(baseSubmission || {
+        id: subId,
+        learnerId,
+        userId: learnerId,
+        learnerName,
+        learnerEmail: learnerEmail || '',
+        activityId,
+        activityTitle: activityTitle || 'Actividad Formativa',
+        fichaId,
+        courseId: '',
+        submissionType: 'document' as const,
+        resubmissionCount: 0,
+        version: 1,
+        submittedAt: now,
+        createdAt: now,
+      }),
+      isExcluded: true,
+      status: 'exonerated',
+      grade: undefined,
+      previousGrade: (baseSubmission?.grade as AcademicGradeCode) || (baseSubmission as any)?.previousGrade,
+      excludedAt: now,
+      excludedBy: instructorId,
+      excludedByName: instructorName || 'Instructor SENA',
+      exclusionReason: reason || 'Exonerado de evidencia por el instructor',
+      updatedAt: now,
+    };
+
+    // Actualizar en memoria
+    const memIdx = inMemorySubmissions.findIndex((s) => s.id === subId);
+    if (memIdx >= 0) {
+      inMemorySubmissions[memIdx] = updatedSubmission;
+    } else {
+      inMemorySubmissions = [updatedSubmission, ...inMemorySubmissions];
+    }
+
+    // Persistir en Firestore /submissions
+    try {
+      const subRef = doc(db, COLLECTION, subId);
+      const updateData: Record<string, any> = {
+        id: subId,
+        activityId,
+        fichaId,
+        learnerId,
+        userId: learnerId,
+        learnerName,
+        isExcluded: true,
+        status: 'exonerated',
+        grade: null,
+        previousGrade: (baseSubmission?.grade as AcademicGradeCode) || (baseSubmission as any)?.previousGrade || null,
+        excludedAt: now,
+        excludedBy: instructorId,
+        excludedByName: instructorName || 'Instructor SENA',
+        exclusionReason: reason || 'Exonerado de evidencia por el instructor',
+        updatedAt: now,
+      };
+      if (activityTitle) updateData.activityTitle = activityTitle;
+      if (learnerEmail) updateData.learnerEmail = learnerEmail;
+
+      await setDoc(subRef, cleanUndefined(updateData), { merge: true });
+    } catch (err) {
+      console.error('[submissionService] Error persistiendo exclusión en /submissions:', err);
+      throw err;
+    }
+
+    // Persistir también en Firestore /activities/{activityId} si existe
+    if (activityId) {
+      try {
+        const actRef = doc(db, FIRESTORE_COLLECTIONS.ACTIVITIES, activityId);
+        await updateDoc(actRef, {
+          excludedLearnerIds: arrayUnion(learnerId),
+          updatedAt: now,
+        });
+      } catch (errAct) {
+        console.warn('[submissionService] Aviso actualizando excludedLearnerIds en actividad:', errAct);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_submission_graded', { detail: updatedSubmission }));
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
+    return updatedSubmission;
+  },
+
+  /**
+   * Retira la exclusión de un aprendiz de una evidencia formativa (Rehabilitar evidencia)
+   */
+  async removeExclusionFromActivity(payload: {
+    submissionId: string;
+    activityId: string;
+    fichaId: string;
+    learnerId: string;
+    instructorId: string;
+  }): Promise<AcademicSubmission | null> {
+    const { submissionId, activityId, learnerId } = payload;
+    const now = new Date().toISOString();
+
+    let baseSubmission: AcademicSubmission | null =
+      inMemorySubmissions.find((s) => s.id === submissionId) || null;
+
+    if (!baseSubmission) {
+      try {
+        const snap = await getDoc(doc(db, COLLECTION, submissionId));
+        if (snap.exists()) {
+          baseSubmission = snap.data() as AcademicSubmission;
+        }
+      } catch (err) {
+        console.warn('[submissionService] Error obteniendo entrega al retirar exclusión:', err);
+      }
+    }
+
+    // Calcular estado restaurado: si tiene dictamen previo o entrega de archivo
+    let restoredStatus: SubmissionAcademicStatus = 'pending';
+    if (baseSubmission?.grade) {
+      restoredStatus =
+        baseSubmission.grade === 'A'
+          ? 'approved'
+          : baseSubmission.grade === 'C'
+          ? 'correction_required'
+          : 'not_approved';
+    } else if (
+      baseSubmission?.fileName ||
+      baseSubmission?.driveUrl ||
+      baseSubmission?.externalUrl ||
+      baseSubmission?.textContent
+    ) {
+      restoredStatus = 'submitted';
+    }
+
+    const updatedSubmission: AcademicSubmission = {
+      ...(baseSubmission || {
+        id: submissionId,
+        activityId,
+        learnerId,
+        userId: learnerId,
+        fichaId: payload.fichaId,
+        courseId: '',
+        submissionType: 'document' as const,
+        resubmissionCount: 0,
+        version: 1,
+        submittedAt: now,
+        createdAt: now,
+      }),
+      isExcluded: false,
+      status: restoredStatus,
+      excludedAt: undefined,
+      excludedBy: undefined,
+      excludedByName: undefined,
+      exclusionReason: undefined,
+      updatedAt: now,
+    };
+
+    // Actualizar en memoria
+    const memIdx = inMemorySubmissions.findIndex((s) => s.id === submissionId);
+    if (memIdx >= 0) {
+      inMemorySubmissions[memIdx] = updatedSubmission;
+    }
+
+    // Persistir en Firestore /submissions
+    try {
+      const subRef = doc(db, COLLECTION, submissionId);
+      await setDoc(
+        subRef,
+        {
+          isExcluded: false,
+          status: restoredStatus,
+          excludedAt: null,
+          excludedBy: null,
+          excludedByName: null,
+          exclusionReason: null,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('[submissionService] Error retirando exclusión en /submissions:', err);
+      throw err;
+    }
+
+    // Actualizar en Firestore /activities/{activityId}
+    if (activityId) {
+      try {
+        const actRef = doc(db, FIRESTORE_COLLECTIONS.ACTIVITIES, activityId);
+        await updateDoc(actRef, {
+          excludedLearnerIds: arrayRemove(learnerId),
+          updatedAt: now,
+        });
+      } catch (errAct) {
+        console.warn('[submissionService] Aviso retirando excludedLearnerIds en actividad:', errAct);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sena_submission_graded', { detail: updatedSubmission }));
+      window.dispatchEvent(new CustomEvent('sena_sidebar_metrics_updated'));
+    }
+
+    return updatedSubmission;
   },
 };

@@ -118,6 +118,7 @@ export const InstructorSubmissionsView: React.FC = () => {
   const [selectedGradeCode, setSelectedGradeCode] = useState<AcademicGradeCode>('A');
   const [feedbackInput, setFeedbackInput] = useState('');
   const [isSavingGrade, setIsSavingGrade] = useState(false);
+  const [gradingSubmissionId, setGradingSubmissionId] = useState<string | null>(null);
 
   // Estados para Rúbricas Pedagógicas (Prompt 19)
   const [activeGradingTab, setActiveGradingTab] = useState<'official' | 'rubric'>('official');
@@ -421,28 +422,46 @@ export const InstructorSubmissionsView: React.FC = () => {
 
   // Evaluación rápida directa desde la tabla (Botones [A] [N] [C] inline - Sección 4)
   const handleQuickInlineGrade = async (sub: AcademicSubmission, gradeCode: AcademicGradeCode) => {
-    // Si requiere corrección o no aprobación, abrir modal para escribir retroalimentación
-    if (gradeCode === 'N' || gradeCode === 'C') {
-      handleOpenGrading(sub, gradeCode);
-      return;
-    }
+    if (!sub.id || gradingSubmissionId === sub.id) return;
+    setGradingSubmissionId(sub.id);
 
-    // Para Aprobación rápida (A)
+    const defaultFeedback =
+      sub.feedback ||
+      (gradeCode === 'A'
+        ? 'Evidencia aprobada satisfactoriamente.'
+        : gradeCode === 'C'
+        ? 'Evidencia devuelta para corrección pedagógica.'
+        : 'Evidencia no aprobada.');
+
     try {
       const updated = await submissionService.gradeSubmission({
         submissionId: sub.id,
-        gradeCode: 'A',
-        feedback: sub.feedback || 'Evidencia aprobada satisfactoriamente.',
+        gradeCode,
+        feedback: defaultFeedback,
         instructorId: instructorUid,
         instructorName,
+        submission: sub,
       });
 
       if (updated) {
         setSubmissions((prev) => prev.map((s) => (s.id === sub.id ? updated : s)));
-        showToast(`Evidencia de ${sub.learnerName || 'Aprendiz'} APROBADA (A) exitosamente.`);
+        const label =
+          gradeCode === 'A'
+            ? 'APROBADA (A)'
+            : gradeCode === 'C'
+            ? 'marcada para CORREGIR (C)'
+            : 'NO APROBADA (N)';
+        showToast(`Evidencia de ${sub.learnerName || 'Aprendiz'} ${label} exitosamente.`);
       }
-    } catch (err) {
-      console.error('[InstructorSubmissionsView] Error en evaluación rápida:', err);
+    } catch (err: any) {
+      console.error('[InstructorSubmissionsView] Error en evaluación rápida:', {
+        code: err?.code,
+        message: err?.message,
+        details: err,
+      });
+      showToast(`No se pudo guardar la calificación: ${err?.message || 'Error en Firestore'}`);
+    } finally {
+      setGradingSubmissionId(null);
     }
   };
 
@@ -1158,8 +1177,9 @@ export const InstructorSubmissionsView: React.FC = () => {
                             <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 shadow-2xs">
                               {/* Botón [ A ] */}
                               <button
+                                disabled={gradingSubmissionId === sub.id}
                                 onClick={() => handleQuickInlineGrade(sub, 'A')}
-                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer ${
+                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                                   sub.grade === 'A' || sub.status === 'approved'
                                     ? 'bg-[#39A900] text-white shadow-xs'
                                     : 'bg-white text-emerald-800 hover:bg-emerald-50 border border-emerald-300'
@@ -1171,8 +1191,9 @@ export const InstructorSubmissionsView: React.FC = () => {
 
                               {/* Botón [ N ] */}
                               <button
+                                disabled={gradingSubmissionId === sub.id}
                                 onClick={() => handleQuickInlineGrade(sub, 'N')}
-                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer ${
+                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                                   sub.grade === 'N' || sub.status === 'not_approved'
                                     ? 'bg-rose-600 text-white shadow-xs'
                                     : 'bg-white text-rose-800 hover:bg-rose-50 border border-rose-300'
@@ -1184,8 +1205,9 @@ export const InstructorSubmissionsView: React.FC = () => {
 
                               {/* Botón [ C ] */}
                               <button
+                                disabled={gradingSubmissionId === sub.id}
                                 onClick={() => handleQuickInlineGrade(sub, 'C')}
-                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer ${
+                                className={`w-7 h-7 rounded-md font-black text-xs transition-all flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                                   sub.grade === 'C' || sub.status === 'correction_required'
                                     ? 'bg-amber-500 text-white shadow-xs'
                                     : 'bg-white text-amber-800 hover:bg-amber-50 border border-amber-300'

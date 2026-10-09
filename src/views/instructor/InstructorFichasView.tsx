@@ -46,6 +46,15 @@ import {
   Info,
   Sliders,
   HardDrive,
+  History,
+  TrendingUp,
+  RotateCcw,
+  SlidersHorizontal,
+  ArrowUpDown,
+  CheckCheck,
+  UserX,
+  ChevronDown,
+  Table,
 } from 'lucide-react';
 import {
   Ficha,
@@ -88,10 +97,14 @@ import { ResourceFormModal } from '../../components/resources/ResourceFormModal'
 import { ApprenticeAcademicProfileModal } from '../../components/academic/ApprenticeAcademicProfileModal';
 import { RubricEvaluationForm } from '../../components/rubrics/RubricEvaluationForm';
 import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
+import { RubricEvaluationViewModal } from '../../components/rubrics/RubricEvaluationViewModal';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
+import { FichaPlanillaMatriz } from '../../components/academic/FichaPlanillaMatriz';
+import { FichaAsistenciaPlanilla } from '../../components/academic/FichaAsistenciaPlanilla';
 import { useAuth } from '../../hooks/useAuth';
 import { auth } from '../../services/firebase/config';
+import { DEMO_APPRENTICES_LIST } from '../../data/mockData';
 
 interface InstructorFichasViewProps {
   onSelectFicha?: (fichaId: string, ficha?: Ficha) => void;
@@ -127,9 +140,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
   const [activeFichaId, setActiveFichaId] = useState<string>(selectedFichaId || initialFichaId || '');
 
-  // 3. Pestañas dentro de la Ficha / Clase (PROMPT 29: 8 Pestañas oficiales con Resumen por defecto)
+  // 3. Pestañas dentro de la Ficha / Clase (PROMPT 29 & PLANILLA: Pestaña Planilla estilo Google Classroom)
   const [activeClassTab, setActiveClassTab] = useState<
-    'summary' | 'activities' | 'apprentices' | 'submissions' | 'grades' | 'attendance' | 'tracking' | 'announcements'
+    'summary' | 'sheet' | 'activities' | 'apprentices' | 'submissions' | 'grades' | 'attendance' | 'tracking' | 'announcements'
   >('summary');
 
   // 4. Estadísticas en tiempo real de cada Ficha para el Grid (Google Classroom style)
@@ -181,7 +194,38 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [isActivitySubmissionsModalOpen, setIsActivitySubmissionsModalOpen] = useState(false);
   const [activitySubmissionsList, setActivitySubmissionsList] = useState<AcademicSubmission[]>([]);
   const [loadingActivitySubmissions, setLoadingActivitySubmissions] = useState(false);
-  const [activitySubmissionFilterStatus, setActivitySubmissionFilterStatus] = useState<'all' | 'pending' | 'graded'>('all');
+  const [activitySubmissionFilterStatus, setActivitySubmissionFilterStatus] = useState<
+    'all' | 'submitted' | 'unsubmitted' | 'pending' | 'graded' | 'approved' | 'not_approved' | 'correction' | 'excluded'
+  >('all');
+  const [activitySubmissionSearchTerm, setActivitySubmissionSearchTerm] = useState('');
+  const [activitySortCriterion, setActivitySortCriterion] = useState<
+    'name_asc' | 'name_desc' | 'delivered_first' | 'unsubmitted_first' | 'pending_grade_first' | 'graded_first'
+  >('name_asc');
+
+  // Menú y Modal de Calificación Masiva («Calificar todo»)
+  const [isBulkMenuOpen, setIsBulkMenuOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState<'all' | 'unsubmitted_n' | 'delivered_a' | null>(null);
+  const [bulkGradeChoice, setBulkGradeChoice] = useState<AcademicGradeCode>('A');
+  const [bulkFeedbackText, setBulkFeedbackText] = useState('');
+  const [isExecutingBulk, setIsExecutingBulk] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; currentName: string }>({
+    current: 0,
+    total: 0,
+    currentName: '',
+  });
+  const [bulkResultSummary, setBulkResultSummary] = useState<{
+    totalProcessed: number;
+    successCount: number;
+    failedItems: Array<{ learnerId: string; learnerName: string; error: string; row: any }>;
+  } | null>(null);
+  const bulkMenuRef = useRef<HTMLDivElement>(null);
+
+  // Modal de Exclusión Individual (Botón E - Excluir)
+  const [isExclusionModalOpen, setIsExclusionModalOpen] = useState(false);
+  const [selectedRowForExclusion, setSelectedRowForExclusion] = useState<any | null>(null);
+  const [exclusionReasonInput, setExclusionReasonInput] = useState('');
+  const [isSavingExclusion, setIsSavingExclusion] = useState(false);
 
   // Modal de Calificación A/N/C y Rúbrica
   const [selectedSubmissionForGrade, setSelectedSubmissionForGrade] = useState<AcademicSubmission | null>(null);
@@ -190,6 +234,8 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [feedbackInput, setFeedbackInput] = useState('');
   const [isSavingGrade, setIsSavingGrade] = useState(false);
   const [activeGradingTab, setActiveGradingTab] = useState<'official' | 'rubric'>('official');
+  const [gradingModalError, setGradingModalError] = useState<string | null>(null);
+  const [gradingSubmissionId, setGradingSubmissionId] = useState<string | null>(null);
 
   // Rúbrica para calificación
   const [currentRubric, setCurrentRubric] = useState<Rubric | null>(null);
@@ -205,6 +251,18 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   // Modal de Inspección de Evidencia
   const [isViewEvidenceModalOpen, setIsViewEvidenceModalOpen] = useState(false);
   const [submissionToView, setSubmissionToView] = useState<AcademicSubmission | null>(null);
+
+  // Estados PROMPT 35: Filtros avanzados y modales para pestaña Evidencias de la Ficha
+  const [submissionSearchTerm, setSubmissionSearchTerm] = useState('');
+  const [submissionFilterActivityId, setSubmissionFilterActivityId] = useState('all');
+  const [submissionFilterGrade, setSubmissionFilterGrade] = useState<string>('all');
+  const [submissionFilterDate, setSubmissionFilterDate] = useState('');
+  const [submissionQuickFilter, setSubmissionQuickFilter] = useState<'all' | 'pending' | 'graded'>('all');
+
+  const [selectedSubmissionForHistory, setSelectedSubmissionForHistory] = useState<AcademicSubmission | null>(null);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [selectedRubricEvaluationForView, setSelectedRubricEvaluationForView] = useState<RubricEvaluation | null>(null);
+  const [isRubricViewModalOpen, setIsRubricViewModalOpen] = useState(false);
 
   // Toast de confirmación
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -335,6 +393,21 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     loadFichasAndCatalogs();
   }, [loadFichasAndCatalogs]);
 
+  // Cerrar menú de Calificar Todo al hacer clic afuera
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (bulkMenuRef.current && !bulkMenuRef.current.contains(event.target as Node)) {
+        setIsBulkMenuOpen(false);
+      }
+    };
+    if (isBulkMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isBulkMenuOpen]);
+
   // PROMPT 29 & 30: Sincronización del ID de Ficha seleccionado desde Router / URL
   useEffect(() => {
     if (selectedFichaId) {
@@ -409,7 +482,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         learningOutcomeService.getLearningOutcomes({
           programId: activeFicha.programId,
         }),
-        trackingService.getAttendance(fichaId, attendanceDate),
+        trackingService.getAttendance(fichaId),
         trackingService.getLearnerRecords(fichaId),
       ]);
 
@@ -752,6 +825,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     if (!activeFicha) return;
     setSelectedActivityForGrading(activity);
     setActivitySubmissionFilterStatus('all');
+    setActivitySubmissionSearchTerm('');
     setIsActivitySubmissionsModalOpen(true);
     setLoadingActivitySubmissions(true);
 
@@ -762,8 +836,22 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         instructorId: instructorUid,
       });
 
-      const allFichaSubs = res.data || [];
-      const activitySubs = allFichaSubs.filter((s) => s.activityId === activity.id);
+      // Combinar con entregas ya cargadas en memoria y estado local de la ficha
+      const combinedPool = [
+        ...classSubmissions,
+        ...(res.data || []),
+      ];
+      const map = new Map<string, AcademicSubmission>();
+      combinedPool.forEach((s) => {
+        if (s.id) map.set(s.id, s);
+      });
+      const allFichaSubs = Array.from(map.values());
+
+      const activitySubs = allFichaSubs.filter(
+        (s) =>
+          s.activityId === activity.id ||
+          (s.activityTitle && activity.title && s.activityTitle.trim().toLowerCase() === activity.title.trim().toLowerCase())
+      );
       setActivitySubmissionsList(activitySubs);
 
       // Cargar evaluaciones de rúbricas existentes si la actividad tiene rúbrica
@@ -782,12 +870,81 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     } catch (err) {
       console.warn('[InstructorFichasView] Error cargando entregas de la actividad:', err);
       // Fallback a classSubmissions en memoria de la ficha
-      const localSubs = classSubmissions.filter((s) => s.activityId === activity.id);
+      const localSubs = classSubmissions.filter(
+        (s) =>
+          s.activityId === activity.id ||
+          (s.activityTitle && activity.title && s.activityTitle.trim().toLowerCase() === activity.title.trim().toLowerCase())
+      );
       setActivitySubmissionsList(localSubs);
     } finally {
       setLoadingActivitySubmissions(false);
     }
   };
+
+  // Sincronizar en tiempo real cuando cualquier entrega sea calificada en el sistema
+  useEffect(() => {
+    const handleSubmissionGradedEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<AcademicSubmission>;
+      if (customEvent.detail && customEvent.detail.id) {
+        const updated = customEvent.detail;
+        setActivitySubmissionsList((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+        });
+        setClassSubmissions((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+        });
+      }
+    };
+
+    window.addEventListener('sena_submission_graded', handleSubmissionGradedEvent);
+    return () => {
+      window.removeEventListener('sena_submission_graded', handleSubmissionGradedEvent);
+    };
+  }, []);
+
+  // Atajos de teclado para calificación en el modal (A = Aprobar, N = No aprobar, C = Corregir, Enter = Guardar)
+  useEffect(() => {
+    if (!isGradingModalOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInputActive =
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        activeEl?.getAttribute('contenteditable') === 'true';
+
+      if (isInputActive) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          handleSaveGradeModal();
+        }
+        return;
+      }
+
+      const key = e.key.toUpperCase();
+      if (key === 'A') {
+        e.preventDefault();
+        setSelectedGradeCode('A');
+        setGradingModalError(null);
+      } else if (key === 'N') {
+        e.preventDefault();
+        setSelectedGradeCode('N');
+        setGradingModalError(null);
+      } else if (key === 'C') {
+        e.preventDefault();
+        setSelectedGradeCode('C');
+        setGradingModalError(null);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveGradeModal();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isGradingModalOpen, selectedGradeCode, feedbackInput, selectedSubmissionForGrade, isSavingGrade]);
 
   // Abrir modal de calificación individual [A] [N] [C] o Rúbrica
   const handleOpenGradingModal = async (
@@ -799,6 +956,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     setSelectedGradeCode((sub.grade as AcademicGradeCode) || defaultGrade);
     setFeedbackInput(sub.feedback || '');
     setActiveGradingTab(initialTab);
+    setGradingModalError(null);
     setIsGradingModalOpen(true);
 
     // Cargar rúbrica si la actividad tiene una vinculada
@@ -837,37 +995,325 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
   // Evaluación rápida inline desde la tabla de la actividad [A] [N] [C]
   const handleQuickInlineGrade = async (sub: AcademicSubmission, gradeCode: AcademicGradeCode) => {
-    // Si es N o C, requiere abrir el modal para ingresar retroalimentación
-    if (gradeCode === 'N' || gradeCode === 'C') {
-      handleOpenGradingModal(sub, gradeCode);
-      return;
-    }
+    if (!sub.id || gradingSubmissionId === sub.id) return;
+    setGradingSubmissionId(sub.id);
 
-    // Aprobación rápida (A)
+    const defaultFeedback =
+      sub.feedback ||
+      (gradeCode === 'A'
+        ? 'Evidencia aprobada satisfactoriamente.'
+        : gradeCode === 'C'
+        ? 'Evidencia devuelta para corrección pedagógica.'
+        : 'Evidencia no aprobada.');
+
     try {
       const updated = await submissionService.gradeSubmission({
         submissionId: sub.id,
-        gradeCode: 'A',
-        feedback: sub.feedback || 'Evidencia aprobada satisfactoriamente.',
+        gradeCode,
+        feedback: defaultFeedback,
         instructorId: instructorUid,
         instructorName: userProfile?.displayName || 'Instructor SENA',
+        submission: sub,
       });
 
       if (updated) {
         // Actualizar listas reactivamente sin recargar
-        setActivitySubmissionsList((prev) => prev.map((s) => (s.id === sub.id ? updated : s)));
-        setClassSubmissions((prev) => prev.map((s) => (s.id === sub.id ? updated : s)));
+        setActivitySubmissionsList((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+        });
+        setClassSubmissions((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+        });
 
-        showToast(`Evidencia de ${sub.learnerName || 'Aprendiz'} APROBADA (A) exitosamente.`);
+        // PROMPT 38: Retirar exclusión de la actividad seleccionada y de actividades en memoria al calificar con A, N o C
+        const targetLearnerId = updated.learnerId || updated.userId || sub.learnerId || sub.userId;
+        if (targetLearnerId) {
+          setSelectedActivityForGrading((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              excludedLearnerIds: (prev.excludedLearnerIds || []).filter((id) => id !== targetLearnerId),
+            };
+          });
+
+          setClassActivities((prev) =>
+            prev.map((act) =>
+              act.id === (updated.activityId || selectedActivityForGrading?.id)
+                ? {
+                    ...act,
+                    excludedLearnerIds: (act.excludedLearnerIds || []).filter((id) => id !== targetLearnerId),
+                  }
+                : act
+            )
+          );
+        }
+
+        if (activeFicha) {
+          setFichaStats((prev) => {
+            const current = prev[activeFicha.id];
+            if (!current) return prev;
+            const wasGraded = Boolean(sub.grade);
+            const isNowGraded = Boolean(updated.grade);
+            return {
+              ...prev,
+              [activeFicha.id]: {
+                ...current,
+                pendingSubmissionsCount:
+                  wasGraded === isNowGraded
+                    ? current.pendingSubmissionsCount
+                    : isNowGraded
+                    ? Math.max(0, current.pendingSubmissionsCount - 1)
+                    : current.pendingSubmissionsCount + 1,
+              },
+            };
+          });
+        }
+
+        const label =
+          gradeCode === 'A'
+            ? 'APROBADA (A)'
+            : gradeCode === 'C'
+            ? 'marcada para CORREGIR (C)'
+            : 'NO APROBADA (N)';
+        showToast(`Evidencia de ${sub.learnerName || 'Aprendiz'} ${label} exitosamente.`);
       }
-    } catch (err) {
-      console.error('[InstructorFichasView] Error en calificación rápida:', err);
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error en calificación rápida:', {
+        code: err?.code,
+        message: err?.message,
+        details: err,
+      });
+      showToast(`No se pudo guardar la calificación: ${err?.message || 'Error en Firestore'}`);
+    } finally {
+      setGradingSubmissionId(null);
+    }
+  };
+
+  // Calificación masiva controlada («Calificar todo»)
+  const handleStartBulkGrading = async (
+    targetRows: any[],
+    mode: 'all' | 'unsubmitted_n' | 'delivered_a',
+    gradeToApply: AcademicGradeCode,
+    feedbackText: string
+  ) => {
+    if (!selectedActivityForGrading || !activeFicha || isExecutingBulk) return;
+    if (targetRows.length === 0) {
+      showToast('No hay aprendices aplicables para esta operación masiva.');
+      return;
+    }
+
+    setIsExecutingBulk(true);
+    setBulkProgress({ current: 0, total: targetRows.length, currentName: '' });
+
+    const successList: AcademicSubmission[] = [];
+    const failedList: Array<{ learnerId: string; learnerName: string; error: string; row: any }> = [];
+
+    const feedbackToUse =
+      feedbackText.trim() ||
+      (mode === 'unsubmitted_n'
+        ? 'No presentó evidencia formativa en los plazos y condiciones estipuladas.'
+        : mode === 'delivered_a'
+        ? 'Evidencia formativa aprobada satisfactoriamente.'
+        : gradeToApply === 'A'
+        ? 'Evidencia aprobada satisfactoriamente.'
+        : gradeToApply === 'C'
+        ? 'Evidencia devuelta para corrección pedagógica.'
+        : 'Evidencia no aprobada.');
+
+    for (let i = 0; i < targetRows.length; i++) {
+      const row = targetRows[i];
+      setBulkProgress({
+        current: i + 1,
+        total: targetRows.length,
+        currentName: row.learnerName,
+      });
+
+      try {
+        const updated = await submissionService.gradeSubmission({
+          submissionId: row.submission.id,
+          gradeCode: gradeToApply,
+          feedback: feedbackToUse,
+          instructorId: instructorUid,
+          instructorName: userProfile?.displayName || 'Instructor SENA',
+          submission: {
+            ...row.submission,
+            learnerId: row.learnerId,
+            userId: row.learnerId,
+            learnerName: row.learnerName,
+            learnerEmail: row.learnerEmail,
+            fichaId: activeFicha.id,
+            activityId: selectedActivityForGrading.id,
+            activityTitle: selectedActivityForGrading.title,
+          },
+        });
+
+        if (updated) {
+          successList.push(updated);
+          setActivitySubmissionsList((prev) => {
+            const exists = prev.some((s) => s.id === updated.id);
+            return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+          });
+          setClassSubmissions((prev) => {
+            const exists = prev.some((s) => s.id === updated.id);
+            return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+          });
+        }
+      } catch (err: any) {
+        console.error(`[InstructorFichasView] Error calificando masivamente a ${row.learnerName}:`, {
+          code: err?.code,
+          message: err?.message,
+          details: err,
+        });
+        failedList.push({
+          learnerId: row.learnerId,
+          learnerName: row.learnerName,
+          error: err?.message || 'Error de persistencia en Firestore',
+          row,
+        });
+      }
+
+      // Pequeño descanso de 30ms para fluidez de UI y no saturar Firestore
+      await new Promise((res) => setTimeout(res, 30));
+    }
+
+    // Actualizar contadores globales de la ficha
+    if (activeFicha && successList.length > 0) {
+      setFichaStats((prev) => {
+        const current = prev[activeFicha.id];
+        if (!current) return prev;
+        return {
+          ...prev,
+          [activeFicha.id]: {
+            ...current,
+            pendingSubmissionsCount: Math.max(0, current.pendingSubmissionsCount - successList.length),
+          },
+        };
+      });
+    }
+
+    setIsExecutingBulk(false);
+    setBulkResultSummary({
+      totalProcessed: targetRows.length,
+      successCount: successList.length,
+      failedItems: failedList,
+    });
+
+    if (failedList.length === 0) {
+      showToast(`Se aplicó dictamen ${gradeToApply} a ${successList.length} aprendices exitosamente.`);
+    } else {
+      showToast(`Calificación masiva: ${successList.length} guardadas, ${failedList.length} fallidas.`);
+    }
+  };
+
+  // Exclusión individual de evidencia (Botón E - Excluir)
+  const handleConfirmExclusion = async () => {
+    if (!selectedRowForExclusion || !selectedActivityForGrading || !activeFicha || isSavingExclusion) return;
+    setIsSavingExclusion(true);
+
+    try {
+      const updated = await submissionService.excludeLearnerFromActivity({
+        submissionId: selectedRowForExclusion.submission.id,
+        activityId: selectedActivityForGrading.id,
+        activityTitle: selectedActivityForGrading.title,
+        fichaId: activeFicha.id,
+        learnerId: selectedRowForExclusion.learnerId,
+        learnerName: selectedRowForExclusion.learnerName,
+        learnerEmail: selectedRowForExclusion.learnerEmail,
+        instructorId: instructorUid,
+        instructorName: userProfile?.displayName || 'Instructor SENA',
+        reason: exclusionReasonInput.trim() || 'Exonerado de evidencia por el instructor',
+        submission: selectedRowForExclusion.submission,
+      });
+
+      if (updated) {
+        setActivitySubmissionsList((prev) => {
+          const exists = prev.some((s) => s.id === updated.id);
+          return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+        });
+        setSelectedActivityForGrading((prev) => {
+          if (!prev) return prev;
+          const currentIds = prev.excludedLearnerIds || [];
+          if (currentIds.includes(selectedRowForExclusion.learnerId)) return prev;
+          return {
+            ...prev,
+            excludedLearnerIds: [...currentIds, selectedRowForExclusion.learnerId],
+          };
+        });
+
+        showToast(`Aprendiz ${selectedRowForExclusion.learnerName} excluido de esta evidencia (E).`);
+        setIsExclusionModalOpen(false);
+        setSelectedRowForExclusion(null);
+        setExclusionReasonInput('');
+      }
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error al excluir aprendiz:', {
+        code: err?.code,
+        message: err?.message,
+      });
+      showToast(`No se pudo excluir al aprendiz: ${err?.message || 'Error en Firestore'}`);
+    } finally {
+      setIsSavingExclusion(false);
+    }
+  };
+
+  // Retirar exclusión y rehabilitar aprendiz
+  const handleRemoveExclusion = async () => {
+    if (!selectedRowForExclusion || !selectedActivityForGrading || !activeFicha || isSavingExclusion) return;
+    setIsSavingExclusion(true);
+
+    try {
+      const updated = await submissionService.removeExclusionFromActivity({
+        submissionId: selectedRowForExclusion.submission.id,
+        activityId: selectedActivityForGrading.id,
+        fichaId: activeFicha.id,
+        learnerId: selectedRowForExclusion.learnerId,
+        instructorId: instructorUid,
+      });
+
+      if (updated) {
+        setActivitySubmissionsList((prev) => {
+          return prev.map((s) => (s.id === updated.id ? updated : s));
+        });
+        setSelectedActivityForGrading((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            excludedLearnerIds: (prev.excludedLearnerIds || []).filter(
+              (id) => id !== selectedRowForExclusion.learnerId
+            ),
+          };
+        });
+
+        showToast(`Exclusión retirada para ${selectedRowForExclusion.learnerName}. Aprendiz rehabilitado.`);
+        setIsExclusionModalOpen(false);
+        setSelectedRowForExclusion(null);
+      }
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error al retirar exclusión:', {
+        code: err?.code,
+        message: err?.message,
+      });
+      showToast(`No se pudo retirar la exclusión: ${err?.message || 'Error en Firestore'}`);
+    } finally {
+      setIsSavingExclusion(false);
     }
   };
 
   // Guardar calificación desde el Modal de Evaluación (A/N/C + Rúbrica pedagógica)
   const handleSaveGradeModal = async () => {
-    if (!selectedSubmissionForGrade) return;
+    if (!selectedSubmissionForGrade || isSavingGrade) return;
+    setGradingModalError(null);
+
+    // 1. Validar datos obligatorios: dictamen C requiere retroalimentación
+    if (selectedGradeCode === 'C' && !feedbackInput.trim()) {
+      setGradingModalError(
+        'El dictamen C (Corregir) requiere retroalimentación obligatoria explicando al aprendiz qué aspectos debe ajustar para su reenvío.'
+      );
+      return;
+    }
+
     setIsSavingGrade(true);
 
     try {
@@ -914,19 +1360,70 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         rubricScore,
         rubricMaxScore,
         rubricPercentage,
+        submission: selectedSubmissionForGrade,
       });
 
-      if (updated) {
-        // Actualizar estados reactivamente
-        setActivitySubmissionsList((prev) =>
-          prev.map((s) => (s.id === selectedSubmissionForGrade.id ? updated : s))
-        );
-        setClassSubmissions((prev) =>
-          prev.map((s) => (s.id === selectedSubmissionForGrade.id ? updated : s))
+      if (!updated) {
+        throw new Error('No se pudo confirmar el guardado en la base de datos. Por favor intenta de nuevo.');
+      }
+
+      // Actualizar estados reactivamente de forma inmediata
+      setActivitySubmissionsList((prev) => {
+        const exists = prev.some((s) => s.id === updated.id);
+        return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+      });
+      setClassSubmissions((prev) => {
+        const exists = prev.some((s) => s.id === updated.id);
+        return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+      });
+
+      // PROMPT 38: Retirar exclusión de la actividad seleccionada y de actividades en memoria al calificar desde modal
+      const targetLearnerId =
+        updated.learnerId ||
+        updated.userId ||
+        selectedSubmissionForGrade.learnerId ||
+        selectedSubmissionForGrade.userId;
+
+      if (targetLearnerId) {
+        setSelectedActivityForGrading((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            excludedLearnerIds: (prev.excludedLearnerIds || []).filter((id) => id !== targetLearnerId),
+          };
+        });
+
+        setClassActivities((prev) =>
+          prev.map((act) =>
+            act.id === (updated.activityId || selectedActivityForGrading?.id)
+              ? {
+                  ...act,
+                  excludedLearnerIds: (act.excludedLearnerIds || []).filter((id) => id !== targetLearnerId),
+                }
+              : act
+          )
         );
       }
 
+      if (activeFicha) {
+        setFichaStats((prev) => {
+          const current = prev[activeFicha.id];
+          if (!current) return prev;
+          const wasGraded = Boolean(selectedSubmissionForGrade.grade);
+          return {
+            ...prev,
+            [activeFicha.id]: {
+              ...current,
+              pendingSubmissionsCount: wasGraded
+                ? current.pendingSubmissionsCount
+                : Math.max(0, current.pendingSubmissionsCount - 1),
+            },
+          };
+        });
+      }
+
       setIsGradingModalOpen(false);
+      setSelectedSubmissionForGrade(null);
       showToast(
         `Calificación guardada: ${
           selectedGradeCode === 'A'
@@ -934,10 +1431,18 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             : selectedGradeCode === 'N'
             ? 'N — No aprobado'
             : 'C — Corregir'
-        }${rubricResults ? ` · Rúbrica (${rubricResults.percentage}%)` : ''}`
+        }${rubricResults ? ` · Rúbrica (${rubricResults.percentage}%)` : ''} exitosamente.`
       );
-    } catch (err) {
-      console.warn('[InstructorFichasView] Error guardando calificación:', err);
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error guardando calificación:', {
+        code: err?.code,
+        message: err?.message,
+        details: err,
+      });
+      const codeSuffix = err?.code ? ` [Código: ${err.code}]` : '';
+      setGradingModalError(
+        (err?.message || 'Ocurrió un error guardando el dictamen en Firestore. Por favor reintenta.') + codeSuffix
+      );
     } finally {
       setIsSavingGrade(false);
     }
@@ -1032,12 +1537,13 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     }
 
     if (activeFicha) {
-      const stats = fichaStats[activeFicha.id] || {
+      const livePendingCount = classSubmissions.filter(
+        (s) => s.status === 'submitted' || s.status === 'under_review' || !s.grade
+      ).length;
+      const stats = {
         apprenticesCount: classApprentices.length,
         activitiesCount: classActivities.length,
-        pendingSubmissionsCount: classSubmissions.filter(
-          (s) => s.status === 'submitted' || s.status === 'under_review' || !s.grade
-        ).length,
+        pendingSubmissionsCount: livePendingCount,
       };
       const center = centers.find((c) => c.id === activeFicha.centerId);
 
@@ -1071,16 +1577,403 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         return true;
       });
 
-      // Filtrado de evidencias
-      const filteredSubmissions = classSubmissions.filter((sub) => {
-        if (submissionFilterStatus === 'pending') {
-          return sub.status === 'submitted' || sub.status === 'under_review' || !sub.grade;
+      // PROMPT 35: Deduplicación respetando la versión vigente para no contar versiones anteriores como entregas independientes
+      const activeClassSubmissions = (() => {
+        const map = new Map<string, AcademicSubmission>();
+        classSubmissions.forEach((sub) => {
+          const key = `${sub.activityId}_${sub.learnerId || sub.userId}`;
+          const existing = map.get(key);
+          if (!existing) {
+            map.set(key, sub);
+          } else {
+            const existingTime = new Date(existing.submittedAt || 0).getTime();
+            const newTime = new Date(sub.submittedAt || 0).getTime();
+            const existingVer = existing.version || 1;
+            const newVer = sub.version || 1;
+            if (newVer > existingVer || (newVer === existingVer && newTime > existingTime)) {
+              map.set(key, sub);
+            }
+          }
+        });
+        return Array.from(map.values());
+      })();
+
+      // Indicadores pedagógicos reales calculados para la ficha activa (Sección 3.G)
+      const fichaSubmissionStats = submissionService.calculateStats(activeClassSubmissions);
+
+      // Filtrado multicriterio de evidencias de la ficha (Sección 3.B)
+      const filteredSubmissions = activeClassSubmissions.filter((sub) => {
+        // 1. Filtro rápido de estado
+        if (submissionQuickFilter === 'pending') {
+          const isPending = sub.status === 'submitted' || sub.status === 'under_review' || !sub.grade;
+          if (!isPending) return false;
+        } else if (submissionQuickFilter === 'graded') {
+          if (!sub.grade) return false;
         }
-        if (submissionFilterStatus === 'graded') {
-          return Boolean(sub.grade);
+
+        // 2. Filtro por actividad de la ficha
+        if (submissionFilterActivityId !== 'all' && sub.activityId !== submissionFilterActivityId) {
+          return false;
         }
+
+        // 3. Filtro por estado / dictamen A/N/C
+        if (submissionFilterGrade !== 'all') {
+          if (submissionFilterGrade === 'pending') {
+            if (sub.grade) return false;
+          } else if (submissionFilterGrade === 'approved') {
+            if (sub.grade !== 'A') return false;
+          } else if (submissionFilterGrade === 'correction_required') {
+            if (sub.grade !== 'C') return false;
+          } else if (submissionFilterGrade === 'not_approved') {
+            if (sub.grade !== 'N') return false;
+          } else if (sub.grade !== submissionFilterGrade) {
+            return false;
+          }
+        }
+
+        // 4. Filtro por fecha de radicación
+        if (submissionFilterDate) {
+          const subDate = sub.submittedAt ? sub.submittedAt.split('T')[0] : '';
+          if (subDate !== submissionFilterDate) return false;
+        }
+
+        // 5. Búsqueda por aprendiz o correo
+        if (submissionSearchTerm.trim()) {
+          const term = submissionSearchTerm.toLowerCase().trim();
+          const matchLearner = (sub.learnerName || '').toLowerCase().includes(term);
+          const matchEmail = (sub.learnerEmail || '').toLowerCase().includes(term);
+          const matchFile = (sub.fileName || '').toLowerCase().includes(term);
+          const matchAct = (sub.activityTitle || '').toLowerCase().includes(term);
+          if (!matchLearner && !matchEmail && !matchFile && !matchAct) {
+            return false;
+          }
+        }
+
         return true;
       });
+
+      const hasActiveSubmissionFilters =
+        submissionSearchTerm !== '' ||
+        submissionFilterActivityId !== 'all' ||
+        submissionFilterGrade !== 'all' ||
+        submissionFilterDate !== '' ||
+        submissionQuickFilter !== 'all';
+
+      const handleResetSubmissionFilters = () => {
+        setSubmissionSearchTerm('');
+        setSubmissionFilterActivityId('all');
+        setSubmissionFilterGrade('all');
+        setSubmissionFilterDate('');
+        setSubmissionQuickFilter('all');
+      };
+
+      // PROMPT 33: Interfaz y conjunto unificado de aprendices matriculados y sus evidencias para la actividad
+      interface ActivityLearnerRow {
+        key: string;
+        learnerId: string;
+        learnerName: string;
+        learnerEmail: string;
+        learnerPhoto?: string;
+        documentNumber?: string;
+        submission: AcademicSubmission;
+        hasDelivered: boolean;
+        grade?: AcademicGradeCode;
+        status: SubmissionAcademicStatus | 'pending';
+        submittedAt?: string | null;
+        isExcluded: boolean;
+        excludedAt?: string;
+        excludedByName?: string;
+        exclusionReason?: string;
+      }
+
+      const activityLearnerRows: ActivityLearnerRow[] = (() => {
+        if (!selectedActivityForGrading) return [];
+
+        const matchedSubIds = new Set<string>();
+
+        // Usar la lista real de aprendices matriculados o fallback representativo de la ficha
+        const apprenticesSource =
+          classApprentices.length > 0
+            ? classApprentices
+            : DEMO_APPRENTICES_LIST.map((demo) => ({
+                uid: demo.id,
+                displayName: demo.fullName,
+                documentNumber: demo.documentNumber || '—',
+                email: demo.email,
+                photoURL: `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                  demo.fullName
+                )}&background=00324D&color=8CE665`,
+                status: 'active' as const,
+                enrollmentId: `enr_${activeFicha.id}_${demo.id}`,
+                enrollmentStatus: 'active',
+                programName: activeFicha.programName || activeFicha.name || demo.programName,
+                fichaNumber: activeFicha.number,
+                courseName: 'Formación Integral SENA',
+                progressPercent: demo.progressPercent || 0,
+                averageGrade: 'N/A',
+                attendanceRate: 100,
+                punctualityRate: 100,
+                submittedEvidencesCount: demo.activitiesSubmittedCount || 0,
+                totalEvidencesCount: 10,
+                activeAttentionCallsCount: 0,
+                hasActiveRestrictions: false,
+                academicNotesCount: 0,
+                behavioralNotesCount: 0,
+                assignedAt: new Date().toISOString(),
+                assignedByName: 'Sistema Académico SENA',
+              }));
+
+        const rows: ActivityLearnerRow[] = apprenticesSource.map((app) => {
+          const sub = activitySubmissionsList.find(
+            (s) =>
+              (s.learnerId && s.learnerId === app.uid) ||
+              (s.userId && s.userId === app.uid) ||
+              (s.learnerEmail && app.email && s.learnerEmail.toLowerCase() === app.email.toLowerCase())
+          );
+
+          // PROMPT 38: Priorizar el estado de exclusión explícito de la entrega si existe
+          const isExcluded = sub && typeof sub.isExcluded === 'boolean'
+            ? sub.isExcluded
+            : Boolean(
+                (selectedActivityForGrading?.excludedLearnerIds &&
+                  selectedActivityForGrading.excludedLearnerIds.includes(app.uid)) ||
+                  sub?.status === 'exonerated' ||
+                  sub?.status === 'excluded'
+              );
+
+          if (sub) {
+            matchedSubIds.add(sub.id);
+            const hasDelivered = Boolean(
+              sub.fileName ||
+              sub.driveFileUrl ||
+              sub.driveUrl ||
+              sub.driveFileId ||
+              sub.externalUrl ||
+              sub.textContent
+            );
+            return {
+              key: `app_${app.uid}`,
+              learnerId: app.uid,
+              learnerName: app.displayName || sub.learnerName || 'Aprendiz',
+              learnerEmail: app.email || sub.learnerEmail || '',
+              learnerPhoto: app.photoURL || undefined,
+              documentNumber: app.documentNumber || undefined,
+              submission: sub,
+              hasDelivered,
+              grade: sub.grade as AcademicGradeCode | undefined,
+              status: sub.status,
+              submittedAt: sub.submittedAt,
+              isExcluded,
+              excludedAt: sub.excludedAt,
+              excludedByName: sub.excludedByName,
+              exclusionReason: sub.exclusionReason,
+            };
+          }
+
+          // Entrega preparada para evaluación directa contextual
+          const syntheticSub: AcademicSubmission = {
+            id: `sub_${activeFicha.id}_${selectedActivityForGrading.id}_${app.uid}`,
+            activityId: selectedActivityForGrading.id,
+            activityTitle: selectedActivityForGrading.title,
+            learnerId: app.uid,
+            userId: app.uid,
+            learnerName: app.displayName || 'Aprendiz',
+            learnerEmail: app.email,
+            fichaId: activeFicha.id,
+            courseId: (activeFicha as any).courseId || '',
+            submissionType: (selectedActivityForGrading.submissionType as any) || 'document',
+            submittedAt: (app as any).enrolledAt || new Date().toISOString(),
+            status: isExcluded ? 'exonerated' : 'submitted',
+            resubmissionCount: 0,
+            version: 1,
+            isExcluded,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          return {
+            key: `app_${app.uid}`,
+            learnerId: app.uid,
+            learnerName: app.displayName || 'Aprendiz',
+            learnerEmail: app.email,
+            learnerPhoto: app.photoURL || undefined,
+            documentNumber: app.documentNumber || undefined,
+            submission: syntheticSub,
+            hasDelivered: false,
+            grade: undefined,
+            status: isExcluded ? 'exonerated' : 'pending',
+            submittedAt: (app as any).enrolledAt || null,
+            isExcluded,
+            excludedAt: undefined,
+            excludedByName: undefined,
+            exclusionReason: undefined,
+          };
+        });
+
+        // Incluir entregas de aprendices no listados en la matrícula actual
+        activitySubmissionsList.forEach((sub) => {
+          if (!matchedSubIds.has(sub.id)) {
+            const hasDelivered = Boolean(
+              sub.fileName ||
+              sub.driveFileUrl ||
+              sub.driveUrl ||
+              sub.driveFileId ||
+              sub.externalUrl ||
+              sub.textContent
+            );
+            const targetLearnerId = sub.learnerId || sub.userId || sub.id;
+            // PROMPT 38: Priorizar el estado de exclusión explícito de la entrega si existe
+            const isExcluded = typeof sub.isExcluded === 'boolean'
+              ? sub.isExcluded
+              : Boolean(
+                  (selectedActivityForGrading?.excludedLearnerIds &&
+                    selectedActivityForGrading.excludedLearnerIds.includes(targetLearnerId)) ||
+                    sub.status === 'exonerated' ||
+                    sub.status === 'excluded'
+                );
+            rows.push({
+              key: `sub_${sub.id}`,
+              learnerId: targetLearnerId,
+              learnerName: sub.learnerName || 'Aprendiz',
+              learnerEmail: sub.learnerEmail || '',
+              learnerPhoto: undefined,
+              documentNumber: undefined,
+              submission: sub,
+              hasDelivered,
+              grade: sub.grade as AcademicGradeCode | undefined,
+              status: sub.status,
+              submittedAt: sub.submittedAt,
+              isExcluded,
+              excludedAt: sub.excludedAt,
+              excludedByName: sub.excludedByName,
+              exclusionReason: sub.exclusionReason,
+            });
+          }
+        });
+
+        return rows;
+      })();
+
+      // 6. Métricas y contadores diferenciados (8 indicadores oficiales)
+      const activityLearnerMetrics = (() => {
+        const total = activityLearnerRows.length;
+        const excludedCount = activityLearnerRows.filter((r) => r.isExcluded).length;
+        // Aprendices activos no excluidos
+        const activeRows = activityLearnerRows.filter((r) => !r.isExcluded);
+
+        const deliveredCount = activeRows.filter((r) => r.hasDelivered).length;
+        const unsubmittedCount = activeRows.filter((r) => !r.hasDelivered).length;
+        const approvedCount = activeRows.filter((r) => r.grade === 'A').length;
+        const correctionCount = activeRows.filter((r) => r.grade === 'C').length;
+        const notApprovedCount = activeRows.filter((r) => r.grade === 'N').length;
+        const gradedCount = approvedCount + correctionCount + notApprovedCount;
+        const pendingGradeCount = activeRows.filter(
+          (r) => !r.grade || r.status === 'submitted' || r.status === 'under_review'
+        ).length;
+
+        return {
+          total,
+          deliveredCount,
+          unsubmittedCount,
+          gradedCount,
+          pendingGradeCount,
+          approvedCount,
+          correctionCount,
+          notApprovedCount,
+          excludedCount,
+        };
+      })();
+
+      // Aprendices destinatarios de la operación masiva actual
+      const bulkTargetRows = (() => {
+        const activeRows = activityLearnerRows.filter((r) => !r.isExcluded);
+        if (bulkMode === 'unsubmitted_n') {
+          return activeRows.filter((r) => !r.hasDelivered);
+        }
+        if (bulkMode === 'delivered_a') {
+          return activeRows.filter((r) => r.hasDelivered);
+        }
+        if (bulkMode === 'all') {
+          return activeRows;
+        }
+        return [];
+      })();
+
+      const filteredActivityLearnerRows = activityLearnerRows
+        .filter((row: ActivityLearnerRow) => {
+          if (activitySubmissionSearchTerm.trim()) {
+            const term = activitySubmissionSearchTerm.toLowerCase().trim();
+            const matchesName = row.learnerName.toLowerCase().includes(term);
+            const matchesEmail = row.learnerEmail.toLowerCase().includes(term);
+            const matchesDoc = row.documentNumber ? row.documentNumber.toLowerCase().includes(term) : false;
+            const matchesFile = row.submission.fileName ? row.submission.fileName.toLowerCase().includes(term) : false;
+            if (!matchesName && !matchesEmail && !matchesDoc && !matchesFile) {
+              return false;
+            }
+          }
+
+          if (activitySubmissionFilterStatus === 'submitted') {
+            return !row.isExcluded && row.hasDelivered;
+          }
+          if (activitySubmissionFilterStatus === 'unsubmitted') {
+            return !row.isExcluded && !row.hasDelivered;
+          }
+          if (activitySubmissionFilterStatus === 'pending') {
+            return !row.isExcluded && (!row.grade || row.status === 'submitted' || row.status === 'under_review');
+          }
+          if (activitySubmissionFilterStatus === 'graded') {
+            return !row.isExcluded && Boolean(row.grade);
+          }
+          if (activitySubmissionFilterStatus === 'approved') {
+            return !row.isExcluded && row.grade === 'A';
+          }
+          if (activitySubmissionFilterStatus === 'not_approved') {
+            return !row.isExcluded && row.grade === 'N';
+          }
+          if (activitySubmissionFilterStatus === 'correction') {
+            return !row.isExcluded && row.grade === 'C';
+          }
+          if (activitySubmissionFilterStatus === 'excluded') {
+            return row.isExcluded;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          switch (activitySortCriterion) {
+            case 'name_asc':
+              return a.learnerName.localeCompare(b.learnerName, 'es', { sensitivity: 'base' });
+            case 'name_desc':
+              return b.learnerName.localeCompare(a.learnerName, 'es', { sensitivity: 'base' });
+            case 'delivered_first':
+              if (a.hasDelivered === b.hasDelivered) {
+                return a.learnerName.localeCompare(b.learnerName, 'es');
+              }
+              return a.hasDelivered ? -1 : 1;
+            case 'unsubmitted_first':
+              if (a.hasDelivered === b.hasDelivered) {
+                return a.learnerName.localeCompare(b.learnerName, 'es');
+              }
+              return a.hasDelivered ? 1 : -1;
+            case 'pending_grade_first': {
+              const aPending = !a.isExcluded && (!a.grade || a.status === 'submitted' || a.status === 'under_review');
+              const bPending = !b.isExcluded && (!b.grade || b.status === 'submitted' || b.status === 'under_review');
+              if (aPending === bPending) {
+                return a.learnerName.localeCompare(b.learnerName, 'es');
+              }
+              return aPending ? -1 : 1;
+            }
+            case 'graded_first': {
+              const aGraded = !a.isExcluded && Boolean(a.grade);
+              const bGraded = !b.isExcluded && Boolean(b.grade);
+              if (aGraded === bGraded) {
+                return a.learnerName.localeCompare(b.learnerName, 'es');
+              }
+              return aGraded ? -1 : 1;
+            }
+            default:
+              return 0;
+          }
+        });
 
       return (
         <div className="space-y-6 animate-in fade-in duration-150">
@@ -1198,6 +2091,17 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             >
               <LayoutDashboard className="w-4 h-4" />
               Resumen
+            </button>
+            <button
+              onClick={() => setActiveClassTab('sheet')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                activeClassTab === 'sheet'
+                  ? 'bg-[#00324D] text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Table className="w-4 h-4" />
+              Planilla
             </button>
             <button
               onClick={() => setActiveClassTab('activities')}
@@ -1491,6 +2395,39 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     </div>
                   </div>
                 </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PESTAÑA: PLANILLA (Matriz de Calificaciones Google Classroom) */}
+              {/* ========================================================= */}
+              {activeClassTab === 'sheet' && (
+                <FichaPlanillaMatriz
+                  ficha={activeFicha}
+                  apprentices={classApprentices}
+                  activities={classActivities}
+                  submissions={classSubmissions}
+                  learningOutcomes={classLearningOutcomes}
+                  instructorUid={instructorUid}
+                  instructorName={userProfile?.displayName || 'Instructor SENA'}
+                  onUpdateSubmission={(updatedSub) => {
+                    setClassSubmissions((prev) => {
+                      const exists = prev.some((s) => s.id === updatedSub.id);
+                      return exists ? prev.map((s) => (s.id === updatedSub.id ? updatedSub : s)) : [updatedSub, ...prev];
+                    });
+                  }}
+                  onUpdateActivity={(updatedAct) => {
+                    setClassActivities((prev) =>
+                      prev.map((a) => (a.id === updatedAct.id ? updatedAct : a))
+                    );
+                  }}
+                  onOpenLearnerProfile={(app) => setSelectedApprenticeProfile(app)}
+                  onOpenActivityDetail={(act) => {
+                    setSelectedActivityForGrading(act);
+                    setIsActivitySubmissionsModalOpen(true);
+                  }}
+                  onRefresh={loadActiveFichaClassData}
+                  showToast={showToast}
+                />
               )}
 
               {/* ========================================================= */}
@@ -1814,199 +2751,437 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               {/* ========================================================= */}
               {activeClassTab === 'submissions' && (
                 <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                  {/* Encabezado de la pestaña Evidencias */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
                     <div>
-                      <h3 className="text-sm font-bold text-[#00324D]">
-                        Evidencias de la Ficha #{activeFicha.number} ({classSubmissions.length})
+                      <h3 className="text-base font-bold text-[#00324D] flex items-center gap-2">
+                        <FolderArchive className="w-5 h-5 text-[#39A900]" />
+                        <span>Evidencias de la Ficha #{activeFicha.number}</span>
+                        <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                          {activeClassSubmissions.length} vigentes
+                        </span>
                       </h3>
-                      <p className="text-xs text-slate-500">
-                        Entregas asociadas únicamente a actividades de esta ficha
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Gestión pedagógica, dictámenes oficiales A/N/C y retroalimentación directa a los aprendices de la ficha
                       </p>
-                    </div>
-                    {/* Filtros de Estado de Evidencia */}
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => setSubmissionFilterStatus('all')}
-                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                          submissionFilterStatus === 'all'
-                            ? 'bg-[#00324D] text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        Todas ({classSubmissions.length})
-                      </button>
-                      <button
-                        onClick={() => setSubmissionFilterStatus('pending')}
-                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                          submissionFilterStatus === 'pending'
-                            ? 'bg-amber-600 text-white'
-                            : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
-                        }`}
-                      >
-                        Por calificar ({stats.pendingSubmissionsCount})
-                      </button>
-                      <button
-                        onClick={() => setSubmissionFilterStatus('graded')}
-                        className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                          submissionFilterStatus === 'graded'
-                            ? 'bg-[#39A900] text-white'
-                            : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                        }`}
-                      >
-                        Calificadas ({gradedCount})
-                      </button>
                     </div>
                   </div>
 
+                  {/* PROMPT 34 & Sección 3.G: Resumen de Evaluación con Datos Reales */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Total Recibidas
+                      </span>
+                      <span className="text-2xl font-black text-[#00324D] font-mono block">
+                        {fichaSubmissionStats.total}
+                      </span>
+                      <span className="text-[10px] text-slate-400">Entregas vigentes</span>
+                    </div>
+
+                    <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">
+                        Por Calificar
+                      </span>
+                      <span className="text-2xl font-black text-amber-900 font-mono block">
+                        {fichaSubmissionStats.pending}
+                      </span>
+                      <span className="text-[10px] text-amber-700">Requieren dictamen</span>
+                    </div>
+
+                    <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-[#2E8500] uppercase tracking-wider block">
+                        Aprobadas (A)
+                      </span>
+                      <span className="text-2xl font-black text-[#2E8500] font-mono block">
+                        {fichaSubmissionStats.approved}
+                      </span>
+                      <span className="text-[10px] text-emerald-700">Cumplen criterios</span>
+                    </div>
+
+                    <div className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-rose-700 uppercase tracking-wider block">
+                        No Aprobadas (N)
+                      </span>
+                      <span className="text-2xl font-black text-rose-800 font-mono block">
+                        {fichaSubmissionStats.notApproved}
+                      </span>
+                      <span className="text-[10px] text-rose-600">No cumplen criterios</span>
+                    </div>
+
+                    <div className="bg-orange-50/70 p-3 rounded-xl border border-orange-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-orange-800 uppercase tracking-wider block">
+                        Por Corregir (C)
+                      </span>
+                      <span className="text-2xl font-black text-orange-900 font-mono block">
+                        {fichaSubmissionStats.correctionRequired}
+                      </span>
+                      <span className="text-[10px] text-orange-700">Reenvío habilitado</span>
+                    </div>
+
+                    <div className="bg-blue-50/70 p-3 rounded-xl border border-blue-200 shadow-2xs space-y-1">
+                      <span className="text-[10px] font-bold text-blue-800 uppercase tracking-wider block">
+                        % Aprobación
+                      </span>
+                      <span className="text-2xl font-black text-[#00324D] font-mono block">
+                        {fichaSubmissionStats.approvalPercentage}%
+                      </span>
+                      <span className="text-[10px] text-blue-700">De las evaluadas</span>
+                    </div>
+                  </div>
+
+                  {/* PROMPT 34 & Sección 3.B: Barra de Filtros y Búsqueda */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-slate-700 mr-1 flex items-center gap-1">
+                          <Filter className="w-3.5 h-3.5 text-slate-500" />
+                          Filtros rápidos:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSubmissionQuickFilter('all')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            submissionQuickFilter === 'all'
+                              ? 'bg-[#00324D] text-white shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          Todas ({activeClassSubmissions.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSubmissionQuickFilter('pending')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            submissionQuickFilter === 'pending'
+                              ? 'bg-amber-600 text-white shadow-xs'
+                              : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/60'
+                          }`}
+                        >
+                          Por calificar ({fichaSubmissionStats.pending})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSubmissionQuickFilter('graded')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            submissionQuickFilter === 'graded'
+                              ? 'bg-[#39A900] text-white shadow-xs'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/60'
+                          }`}
+                        >
+                          Calificadas ({fichaSubmissionStats.evaluatedCount})
+                        </button>
+                      </div>
+
+                      {hasActiveSubmissionFilters && (
+                        <button
+                          type="button"
+                          onClick={handleResetSubmissionFilters}
+                          className="px-2.5 py-1 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Limpiar filtros
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                      {/* Búsqueda por aprendiz o correo */}
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={submissionSearchTerm}
+                          onChange={(e) => setSubmissionSearchTerm(e.target.value)}
+                          placeholder="Buscar aprendiz o correo..."
+                          className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-[#39A900]"
+                        />
+                      </div>
+
+                      {/* Filtrar por Actividad */}
+                      <div>
+                        <select
+                          value={submissionFilterActivityId}
+                          onChange={(e) => setSubmissionFilterActivityId(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-[#39A900]"
+                        >
+                          <option value="all">Todas las actividades ({classActivities.length})</option>
+                          {classActivities.map((act) => (
+                            <option key={act.id} value={act.id}>
+                              {act.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Filtrar por Dictamen A/N/C */}
+                      <div>
+                        <select
+                          value={submissionFilterGrade}
+                          onChange={(e) => setSubmissionFilterGrade(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-[#39A900]"
+                        >
+                          <option value="all">Todos los dictámenes</option>
+                          <option value="pending">Pendientes de calificar</option>
+                          <option value="approved">A — Aprobado</option>
+                          <option value="correction_required">C — Por corregir</option>
+                          <option value="not_approved">N — No aprobado</option>
+                        </select>
+                      </div>
+
+                      {/* Filtrar por Fecha */}
+                      <div>
+                        <input
+                          type="date"
+                          value={submissionFilterDate}
+                          onChange={(e) => setSubmissionFilterDate(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-[#39A900]"
+                          title="Filtrar por fecha de radicación"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PROMPT 34 & Sección 3.A: Tabla Detallada de Evidencias */}
                   {filteredSubmissions.length === 0 ? (
-                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-2">
-                      <FolderArchive className="w-10 h-10 text-slate-300 mx-auto" />
-                      <h4 className="text-sm font-bold text-slate-700">No hay evidencias registradas en este filtro</h4>
+                    <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center space-y-2">
+                      <FolderArchive className="w-12 h-12 text-slate-300 mx-auto" />
+                      <h4 className="text-sm font-bold text-slate-700">No se encontraron evidencias con los filtros seleccionados</h4>
                       <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                        Cuando los aprendices envíen sus evidencias pedagógicas, aparecerán listadas aquí para su evaluación.
+                        {hasActiveSubmissionFilters
+                          ? 'Prueba modificando o limpiando los criterios de búsqueda para visualizar las evidencias.'
+                          : 'Cuando los aprendices matriculados en esta ficha radiquen evidencias pedagógicas, aparecerán aquí para evaluarlas.'}
                       </p>
+                      {hasActiveSubmissionFilters && (
+                        <button
+                          type="button"
+                          onClick={handleResetSubmissionFilters}
+                          className="mt-2 px-3 py-1.5 bg-[#00324D] text-white rounded-lg text-xs font-bold hover:bg-[#004A73] transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          Restablecer filtros
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
-                            <th className="p-3 font-bold">Aprendiz</th>
-                            <th className="p-3 font-bold">Actividad</th>
-                            <th className="p-3 font-bold">Fecha Envío</th>
-                            <th className="p-3 font-bold text-center">Estado</th>
-                            <th className="p-3 font-bold text-center">Dictamen</th>
-                            <th className="p-3 font-bold text-right">Archivos / Acción</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {filteredSubmissions.map((sub) => (
-                            <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
-                              <td className="p-3 font-bold text-slate-900">
-                                {sub.learnerName || sub.learnerEmail || 'Aprendiz'}
-                              </td>
-                              <td className="p-3 text-slate-800">{sub.activityTitle || 'Actividad Formativa'}</td>
-                              <td className="p-3 text-slate-500">
-                                {new Date(sub.submittedAt).toLocaleDateString('es-CO')}
-                              </td>
-                              <td className="p-3 text-center">
-                                <StatusBadge status={sub.status as any} size="sm" />
-                              </td>
-                              <td className="p-3 text-center">
-                                {sub.grade ? (
-                                  <span
-                                    className={`font-mono font-black px-2.5 py-0.5 rounded text-xs ${
-                                      sub.grade === 'A'
-                                        ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/30'
-                                        : 'bg-rose-100 text-rose-800 border border-rose-300'
-                                    }`}
-                                  >
-                                    {sub.grade}
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                                    Pendiente
-                                  </span>
-                                )}
-                              </td>
-                              <td className="p-3 text-right">
-                                <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                                  {/* Ver evidencia */}
-                                  <button
-                                    onClick={() => {
-                                      setSubmissionToView(sub);
-                                      setIsViewEvidenceModalOpen(true);
-                                    }}
-                                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                                    title="Inspeccionar evidencia"
-                                  >
-                                    <Eye className="w-3 h-3 text-slate-600" />
-                                    <span>Ver</span>
-                                  </button>
-
-                                  {/* Evaluación rápida [A] inline */}
-                                  <button
-                                    onClick={() => handleQuickInlineGrade(sub, 'A')}
-                                    className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                      sub.grade === 'A'
-                                        ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40 ring-1 ring-[#39A900]/30'
-                                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                    }`}
-                                    title="Aprobar evidencia (A)"
-                                  >
-                                    A
-                                  </button>
-
-                                  {/* Evaluación rápida [C] inline */}
-                                  <button
-                                    onClick={() => handleQuickInlineGrade(sub, 'C')}
-                                    className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                      sub.grade === 'C'
-                                        ? 'bg-amber-100 text-amber-900 border border-amber-400 ring-1 ring-amber-400/30'
-                                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
-                                    }`}
-                                    title="Solicitar corrección (C)"
-                                  >
-                                    C
-                                  </button>
-
-                                  {/* Evaluación rápida [N] inline */}
-                                  <button
-                                    onClick={() => handleQuickInlineGrade(sub, 'N')}
-                                    className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                      sub.grade === 'N'
-                                        ? 'bg-rose-100 text-rose-900 border border-rose-400 ring-1 ring-rose-400/30'
-                                        : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200'
-                                    }`}
-                                    title="No aprobar evidencia (N)"
-                                  >
-                                    N
-                                  </button>
-
-                                  {/* Feedback detallado */}
-                                  <button
-                                    onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'official')}
-                                    className="px-2 py-1 bg-[#00324D] hover:bg-[#004A73] text-white rounded font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                                    title="Editar retroalimentación"
-                                  >
-                                    <MessageSquare className="w-3 h-3 text-[#8CE665]" />
-                                    <span>Feedback</span>
-                                  </button>
-
-                                  {/* Rúbrica Pedagógica */}
-                                  {(() => {
-                                    const act = classActivities.find((a) => a.id === sub.activityId);
-                                    if (!act?.rubricId) return null;
-                                    return (
-                                      <button
-                                        onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'rubric')}
-                                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-emerald-200 rounded font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                                        title="Evaluar con Rúbrica Pedagógica"
-                                      >
-                                        <Sliders className="w-3 h-3 text-[#39A900]" />
-                                        <span>Rúbrica</span>
-                                      </button>
-                                    );
-                                  })()}
-
-                                  {/* Google Drive */}
-                                  {sub.driveFileUrl && (
-                                    <a
-                                      href={sub.driveFileUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="p-1 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 rounded font-semibold text-[11px] inline-flex items-center gap-1"
-                                      title="Abrir en Google Drive"
-                                    >
-                                      <HardDrive className="w-3.5 h-3.5 text-blue-600" />
-                                    </a>
-                                  )}
-                                </div>
-                              </td>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-[#00324D] text-white border-b border-slate-700 whitespace-nowrap">
+                              <th className="p-3 font-bold">Aprendiz</th>
+                              <th className="p-3 font-bold">Actividad Formativa</th>
+                              <th className="p-3 font-bold">Fecha / Hora</th>
+                              <th className="p-3 font-bold text-center">Estado</th>
+                              <th className="p-3 font-bold text-center">Dictamen SENA</th>
+                              <th className="p-3 font-bold">Retroalimentación</th>
+                              <th className="p-3 font-bold text-right">Archivos / Acciones</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {filteredSubmissions.map((sub) => {
+                              const act = classActivities.find((a) => a.id === sub.activityId);
+                              const historyCount = (sub.submissionHistory || []).length;
+
+                              return (
+                                <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
+                                  {/* Aprendiz */}
+                                  <td className="p-3">
+                                    <span className="font-bold text-slate-900 block">
+                                      {sub.learnerName || 'Aprendiz'}
+                                    </span>
+                                    {sub.learnerEmail && (
+                                      <span className="text-[11px] text-slate-500 block">
+                                        {sub.learnerEmail}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Actividad */}
+                                  <td className="p-3">
+                                    <span className="font-semibold text-slate-800 block line-clamp-1">
+                                      {sub.activityTitle || act?.title || 'Actividad Formativa'}
+                                    </span>
+                                    {sub.fileName && (
+                                      <span className="text-[10px] text-slate-500 font-mono block line-clamp-1">
+                                        {sub.fileName}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Fecha / Hora */}
+                                  <td className="p-3 text-slate-500 whitespace-nowrap">
+                                    <div>{new Date(sub.submittedAt).toLocaleDateString('es-CO')}</div>
+                                    <div className="text-[10px] text-slate-400">
+                                      {new Date(sub.submittedAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                                    </div>
+                                  </td>
+
+                                  {/* Estado */}
+                                  <td className="p-3 text-center whitespace-nowrap">
+                                    <StatusBadge status={sub.status as any} size="sm" />
+                                  </td>
+
+                                  {/* Dictamen oficial */}
+                                  <td className="p-3 text-center whitespace-nowrap">
+                                    {sub.grade ? (
+                                      <span
+                                        className={`font-mono font-black px-2.5 py-1 rounded text-xs inline-flex items-center gap-1 shadow-2xs ${
+                                          sub.grade === 'A'
+                                            ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40'
+                                            : sub.grade === 'C'
+                                            ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                            : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                        }`}
+                                      >
+                                        {sub.grade === 'A' ? 'A — Aprobado' : sub.grade === 'C' ? 'C — Corregir' : 'N — No aprobado'}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[11px] text-amber-800 bg-amber-50 px-2.5 py-1 rounded border border-amber-200 font-bold">
+                                        Por calificar
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Retroalimentación */}
+                                  <td className="p-3 max-w-xs">
+                                    {sub.feedback ? (
+                                      <p className="text-[11px] text-slate-700 italic line-clamp-2" title={sub.feedback}>
+                                        "{sub.feedback}"
+                                      </p>
+                                    ) : (
+                                      <span className="text-[11px] text-slate-400 italic">Sin comentarios</span>
+                                    )}
+                                    {sub.gradedBy && (
+                                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                                        Por: {sub.gradedBy}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Archivos / Acciones */}
+                                  <td className="p-3 text-right">
+                                    <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                      {/* Ver evidencia en modal */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSubmissionToView(sub);
+                                          setIsViewEvidenceModalOpen(true);
+                                        }}
+                                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                                        title="Inspeccionar evidencia"
+                                      >
+                                        <Eye className="w-3 h-3 text-slate-600" />
+                                        <span>Ver</span>
+                                      </button>
+
+                                      {/* Calificación rápida [A] inline */}
+                                      <button
+                                        type="button"
+                                        disabled={gradingSubmissionId === sub.id}
+                                        onClick={() => handleQuickInlineGrade(sub, 'A')}
+                                        className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                          sub.grade === 'A'
+                                            ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40 ring-1 ring-[#39A900]/30'
+                                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                        }`}
+                                        title="Aprobar evidencia (A)"
+                                      >
+                                        A
+                                      </button>
+
+                                      {/* Calificación rápida [C] inline */}
+                                      <button
+                                        type="button"
+                                        disabled={gradingSubmissionId === sub.id}
+                                        onClick={() => handleQuickInlineGrade(sub, 'C')}
+                                        className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                          sub.grade === 'C'
+                                            ? 'bg-amber-100 text-amber-900 border border-amber-400 ring-1 ring-amber-400/30'
+                                            : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
+                                        }`}
+                                        title="Solicitar corrección (C)"
+                                      >
+                                        C
+                                      </button>
+
+                                      {/* Calificación rápida [N] inline */}
+                                      <button
+                                        type="button"
+                                        disabled={gradingSubmissionId === sub.id}
+                                        onClick={() => handleQuickInlineGrade(sub, 'N')}
+                                        className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                                          sub.grade === 'N'
+                                            ? 'bg-rose-100 text-rose-900 border border-rose-400 ring-1 ring-rose-400/30'
+                                            : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200'
+                                        }`}
+                                        title="No aprobar evidencia (N)"
+                                      >
+                                        N
+                                      </button>
+
+                                      {/* Feedback completo */}
+                                      <button
+                                        type="button"
+                                        disabled={gradingSubmissionId === sub.id}
+                                        onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'official')}
+                                        className="px-2 py-1 bg-[#00324D] hover:bg-[#004A73] text-white rounded font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        title="Editar calificación y retroalimentación"
+                                      >
+                                        <MessageSquare className="w-3 h-3 text-[#8CE665]" />
+                                        <span>Feedback</span>
+                                      </button>
+
+                                      {/* Rúbrica Pedagógica si la actividad tiene */}
+                                      {act?.rubricId && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'rubric')}
+                                          className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-emerald-200 rounded font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                                          title="Evaluar con Rúbrica Pedagógica"
+                                        >
+                                          <Sliders className="w-3 h-3 text-[#39A900]" />
+                                          <span>Rúbrica</span>
+                                        </button>
+                                      )}
+
+                                      {/* Historial de versiones */}
+                                      {(historyCount > 0 || (sub.resubmissionCount || 0) > 0) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedSubmissionForHistory(sub);
+                                            setIsHistoryModalOpen(true);
+                                          }}
+                                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                                          title="Ver historial de reenvíos"
+                                        >
+                                          <History className="w-3 h-3 text-slate-600" />
+                                          <span>Historial</span>
+                                        </button>
+                                      )}
+
+                                      {/* Enlace a Google Drive directo si existe */}
+                                      {(sub.driveFileUrl || sub.driveUrl || sub.driveFileId) && (
+                                        <a
+                                          href={sub.driveUrl || sub.driveFileUrl || `https://drive.google.com/file/d/${sub.driveFileId}/view`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="p-1 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 rounded font-semibold text-[11px] inline-flex items-center gap-1"
+                                          title="Abrir archivo en Google Drive"
+                                        >
+                                          <HardDrive className="w-3.5 h-3.5 text-blue-600" />
+                                        </a>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2128,173 +3303,20 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               )}
 
               {/* ========================================================= */}
-              {/* PESTAÑA 6: ASISTENCIA (PROMPT 29 Sección 20) */}
+              {/* PESTAÑA 6: ASISTENCIA (PLANILLA GENERAL MATRICIAL) */}
               {/* ========================================================= */}
               {activeClassTab === 'attendance' && (
-                <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100">
-                    <div>
-                      <h3 className="text-sm font-bold text-[#00324D]">
-                        Control Diario de Asistencia — Ficha #{activeFicha.number}
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Registro oficial de asistencia en Firestore (/attendance)
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <Calendar className="w-4 h-4 text-slate-500" />
-                        <input
-                          type="date"
-                          value={attendanceDate}
-                          onChange={(e) => setAttendanceDate(e.target.value)}
-                          className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:border-[#39A900] bg-white"
-                        />
-                      </div>
-                      <button
-                        onClick={handleSaveAttendance}
-                        disabled={isSavingAttendance || classApprentices.length === 0}
-                        className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        <CheckSquare className="w-3.5 h-3.5" />
-                        <span>{isSavingAttendance ? 'Guardando...' : 'Guardar Planilla'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {attendanceFeedback && (
-                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2 animate-in fade-in">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>{attendanceFeedback}</span>
-                    </div>
-                  )}
-
-                  {/* Resumen de la sesión */}
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                      <span className="text-[11px] text-slate-500 block">En Sesión</span>
-                      <span className="text-lg font-bold font-mono text-[#00324D]">{totalSessionApps}</span>
-                    </div>
-                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center">
-                      <span className="text-[11px] text-emerald-800 font-bold block">Presentes</span>
-                      <span className="text-lg font-bold font-mono text-emerald-900">{presentCount}</span>
-                    </div>
-                    <div className="bg-rose-50 p-3 rounded-xl border border-rose-200 text-center">
-                      <span className="text-[11px] text-rose-800 font-bold block">Ausentes</span>
-                      <span className="text-lg font-bold font-mono text-rose-900">{absentCount}</span>
-                    </div>
-                    <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-center">
-                      <span className="text-[11px] text-amber-800 font-bold block">Tardanzas</span>
-                      <span className="text-lg font-bold font-mono text-amber-900">{lateCount}</span>
-                    </div>
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                      <span className="text-[11px] text-slate-500 block">% Asistencia</span>
-                      <span className="text-lg font-bold font-mono text-[#00324D]">{attRate}%</span>
-                    </div>
-                  </div>
-
-                  {classApprentices.length === 0 ? (
-                    <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
-                      No hay aprendices registrados en esta ficha para tomar asistencia.
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-[#00324D] text-white border-b border-slate-700">
-                            <th className="p-3 font-bold">Aprendiz</th>
-                            <th className="p-3 font-bold text-center">Estado de Asistencia</th>
-                            <th className="p-3 font-bold">Observación Pedagógica</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {classApprentices.map((app) => {
-                            const currentStatus = attendanceStatuses[app.uid] || 'PRESENTE';
-
-                            return (
-                              <tr key={app.uid} className="hover:bg-slate-50/80 transition-colors">
-                                <td className="p-3">
-                                  <div className="font-bold text-slate-900">{app.displayName}</div>
-                                  <span className="text-[10px] text-slate-400 font-mono">
-                                    {app.documentNumber !== 'No registrado' ? `CC ${app.documentNumber}` : app.email}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-center">
-                                  <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'PRESENTE' }))
-                                      }
-                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                                        currentStatus === 'PRESENTE'
-                                          ? 'bg-[#39A900] text-white shadow-xs'
-                                          : 'text-slate-600 hover:bg-slate-200'
-                                      }`}
-                                    >
-                                      PRESENTE
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'AUSENTE' }))
-                                      }
-                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                                        currentStatus === 'AUSENTE'
-                                          ? 'bg-rose-600 text-white shadow-xs'
-                                          : 'text-slate-600 hover:bg-slate-200'
-                                      }`}
-                                    >
-                                      AUSENTE
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'TARDE' }))
-                                      }
-                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                                        currentStatus === 'TARDE'
-                                          ? 'bg-amber-600 text-white shadow-xs'
-                                          : 'text-slate-600 hover:bg-slate-200'
-                                      }`}
-                                    >
-                                      TARDE
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setAttendanceStatuses((prev) => ({ ...prev, [app.uid]: 'EXCUSADO' }))
-                                      }
-                                      className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                                        currentStatus === 'EXCUSADO'
-                                          ? 'bg-blue-600 text-white shadow-xs'
-                                          : 'text-slate-600 hover:bg-slate-200'
-                                      }`}
-                                    >
-                                      EXCUSADO
-                                    </button>
-                                  </div>
-                                </td>
-                                <td className="p-3">
-                                  <input
-                                    type="text"
-                                    placeholder="Observación opcional..."
-                                    value={attendanceObservations[app.uid] || ''}
-                                    onChange={(e) =>
-                                      setAttendanceObservations((prev) => ({ ...prev, [app.uid]: e.target.value }))
-                                    }
-                                    className="w-full px-2.5 py-1 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white"
-                                  />
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+                <FichaAsistenciaPlanilla
+                  ficha={activeFicha}
+                  apprentices={classApprentices}
+                  initialAttendance={classAttendance}
+                  instructorUid={instructorUid}
+                  instructorName={userProfile?.displayName || 'Instructor SENA'}
+                  onRefreshData={loadActiveFichaClassData}
+                  onAttendanceUpdated={(newAttendance) => {
+                    setClassAttendance(newAttendance);
+                  }}
+                />
               )}
 
               {/* ========================================================= */}
@@ -2589,6 +3611,1643 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               </div>
             </form>
           </Modal>
+
+          {/* =========================================================================
+              PROMPT 33: MODAL 1 — ENTREGAS DE LA ACTIVIDAD (CALIFICAR EVIDENCIAS)
+              Filtrado automáticamente por fichaId = activeFicha.id y activityId
+             ========================================================================= */}
+          <Modal
+            isOpen={isActivitySubmissionsModalOpen}
+            onClose={() => {
+              setIsActivitySubmissionsModalOpen(false);
+              setSelectedActivityForGrading(null);
+            }}
+            title={`Calificar Evidencias — ${selectedActivityForGrading?.title || 'Actividad Formativa'}`}
+            subtitle={`Ficha #${activeFicha?.number || ''} · ${activeFicha?.name || activeFicha?.programName || ''}`}
+            maxWidth="5xl"
+          >
+            <div className="space-y-4">
+              {/* Cabecera y botón de salto a pestaña Evidencias de la Ficha */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                <div>
+                  <p className="text-xs text-slate-600">
+                    Califica las evidencias de los aprendices matriculados en esta ficha para esta actividad formativa.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                    {selectedActivityForGrading?.rubricId && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        <Sliders className="w-3 h-3 text-[#39A900]" />
+                        Evaluación con Rúbrica Pedagógica disponible
+                      </span>
+                    )}
+                    {selectedActivityForGrading?.dueDate && (
+                      <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-slate-400" />
+                        Límite: {new Date(selectedActivityForGrading.dueDate).toLocaleDateString('es-CO')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedActivityForGrading) {
+                        setSubmissionFilterActivityId(selectedActivityForGrading.id);
+                      }
+                      setActiveClassTab('submissions');
+                      setIsActivitySubmissionsModalOpen(false);
+                    }}
+                    className="px-3 py-1.5 bg-[#EBF8E7] hover:bg-[#d9f3d2] text-[#2E8500] border border-[#39A900]/30 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer"
+                    title="Ver y filtrar todas las evidencias en la pestaña principal Evidencias"
+                  >
+                    <FolderArchive className="w-3.5 h-3.5" />
+                    <span>Ver en pestaña Evidencias</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tarjetas de Resumen de Calificación de la Actividad — 8 Indicadores Diferenciados */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-xs">
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col justify-between">
+                  <span className="text-slate-500 font-medium text-[11px] truncate">Total Aprendices</span>
+                  <strong className="text-base font-extrabold text-slate-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.total}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-sky-50 border border-sky-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-sky-700 font-medium text-[11px] truncate">Con entrega</span>
+                  <strong className="text-base font-extrabold text-sky-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.deliveredCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-slate-100 border border-slate-300/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-slate-600 font-medium text-[11px] truncate">Sin entrega</span>
+                  <strong className="text-base font-extrabold text-slate-800 font-mono mt-0.5">
+                    {activityLearnerMetrics.unsubmittedCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-amber-800 font-medium text-[11px] truncate">Por calificar</span>
+                  <strong className="text-base font-extrabold text-amber-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.pendingGradeCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-emerald-800 font-medium text-[11px] truncate">Aprobadas (A)</span>
+                  <strong className="text-base font-extrabold text-[#2E8500] font-mono mt-0.5">
+                    {activityLearnerMetrics.approvedCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-rose-50 border border-rose-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-rose-800 font-medium text-[11px] truncate">No aprobadas (N)</span>
+                  <strong className="text-base font-extrabold text-rose-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.notApprovedCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-orange-50 border border-orange-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-orange-800 font-medium text-[11px] truncate">Por corregir (C)</span>
+                  <strong className="text-base font-extrabold text-orange-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.correctionCount}
+                  </strong>
+                </div>
+                <div className="p-2.5 bg-purple-50 border border-purple-200/80 rounded-xl flex flex-col justify-between">
+                  <span className="text-purple-800 font-medium text-[11px] truncate">Excluidos (E)</span>
+                  <strong className="text-base font-extrabold text-purple-900 font-mono mt-0.5">
+                    {activityLearnerMetrics.excludedCount}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Barra de Búsqueda, Ordenamiento, Calificar Todo y Filtros de Estado */}
+              <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                  {/* Buscador */}
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por aprendiz, correo, cédula o archivo..."
+                      value={activitySubmissionSearchTerm}
+                      onChange={(e) => setActivitySubmissionSearchTerm(e.target.value)}
+                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900]"
+                    />
+                  </div>
+
+                  {/* Selector: Ordenar por */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                      <span className="hidden md:inline">Ordenar por:</span>
+                    </span>
+                    <select
+                      value={activitySortCriterion}
+                      onChange={(e) => setActivitySortCriterion(e.target.value as any)}
+                      className="text-xs font-semibold bg-white text-slate-800 border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-[#39A900] cursor-pointer"
+                      title="Criterio de ordenamiento de la planilla"
+                    >
+                      <option value="name_asc">Nombre (A - Z)</option>
+                      <option value="name_desc">Nombre (Z - A)</option>
+                      <option value="delivered_first">Con evidencia entregada</option>
+                      <option value="unsubmitted_first">Sin evidencia entregada</option>
+                      <option value="pending_grade_first">Pendientes de calificación</option>
+                      <option value="graded_first">Calificados</option>
+                    </select>
+                  </div>
+
+                  {/* Botón: Calificar todo con Menú desplegable */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setIsBulkMenuOpen((prev) => !prev)}
+                      className="w-full sm:w-auto px-3 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all inline-flex items-center justify-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                      title="Operaciones de calificación masiva controlada"
+                    >
+                      <CheckCheck className="w-3.5 h-3.5 text-[#8CE665]" />
+                      <span>Calificar todo</span>
+                      <ChevronDown className="w-3 h-3 text-slate-300" />
+                    </button>
+
+                    {isBulkMenuOpen && (
+                      <div
+                        ref={bulkMenuRef}
+                        className="absolute right-0 mt-1.5 w-80 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100"
+                      >
+                        <div className="px-3 py-1.5 border-b border-slate-100 text-[11px] font-semibold text-slate-500">
+                          Operaciones Masivas de Evaluación
+                        </div>
+
+                        {/* Opción A */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsBulkMenuOpen(false);
+                            setBulkMode('all');
+                            setBulkGradeChoice('A');
+                            setBulkFeedbackText('');
+                            setBulkResultSummary(null);
+                            setIsBulkModalOpen(true);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-50 transition-colors flex items-start gap-2.5 cursor-pointer group border-b border-slate-50"
+                        >
+                          <span className="w-6 h-6 rounded-lg bg-emerald-100 text-[#2E8500] font-black text-xs flex items-center justify-center shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                            A
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900 leading-snug">
+                              Opción A. Calificar a todos los aprendices
+                            </p>
+                            <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                              Aplica un dictamen elegido (A, N o C) a todos los aprendices evaluables ({activityLearnerMetrics.total - activityLearnerMetrics.excludedCount}).
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Opción B */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsBulkMenuOpen(false);
+                            setBulkMode('unsubmitted_n');
+                            setBulkGradeChoice('N');
+                            setBulkFeedbackText('No presentó evidencia formativa en los plazos y condiciones estipuladas.');
+                            setBulkResultSummary(null);
+                            setIsBulkModalOpen(true);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-50 transition-colors flex items-start gap-2.5 cursor-pointer group border-b border-slate-50"
+                        >
+                          <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                            B
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900 leading-snug">
+                              Opción B. Calificar como no aprobado (N) a quienes no entregaron
+                            </p>
+                            <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                              Aplica dictamen N únicamente a los {activityLearnerMetrics.unsubmittedCount} aprendices sin evidencia radicada.
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Opción C */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsBulkMenuOpen(false);
+                            setBulkMode('delivered_a');
+                            setBulkGradeChoice('A');
+                            setBulkFeedbackText('Evidencia formativa aprobada satisfactoriamente.');
+                            setBulkResultSummary(null);
+                            setIsBulkModalOpen(true);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-50 transition-colors flex items-start gap-2.5 cursor-pointer group"
+                        >
+                          <span className="w-6 h-6 rounded-lg bg-sky-100 text-sky-800 font-black text-xs flex items-center justify-center shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                            C
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900 leading-snug">
+                              Opción C. Calificar como aprobado (A) solo a quienes entregaron
+                            </p>
+                            <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                              Aplica dictamen A únicamente a las {activityLearnerMetrics.deliveredCount} entregas radicadas.
+                            </p>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Filtros rápidos de estado */}
+                <div className="flex items-center gap-1 overflow-x-auto w-full shrink-0 pt-1 pb-0.5 border-t border-slate-200/60">
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('all')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'all'
+                        ? 'bg-[#00324D] text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    Todos ({activityLearnerMetrics.total})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('submitted')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'submitted'
+                        ? 'bg-sky-600 text-white shadow-xs'
+                        : 'bg-white text-sky-800 hover:bg-sky-50 border border-sky-200'
+                    }`}
+                  >
+                    Con entrega ({activityLearnerMetrics.deliveredCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('unsubmitted')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'unsubmitted'
+                        ? 'bg-slate-700 text-white shadow-xs'
+                        : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    Sin entrega ({activityLearnerMetrics.unsubmittedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('pending')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'pending'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'bg-white text-amber-800 hover:bg-amber-50 border border-amber-200'
+                    }`}
+                  >
+                    Por calificar ({activityLearnerMetrics.pendingGradeCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('graded')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'graded'
+                        ? 'bg-[#39A900] text-white shadow-xs'
+                        : 'bg-white text-emerald-800 hover:bg-emerald-50 border border-emerald-200'
+                    }`}
+                  >
+                    Calificados ({activityLearnerMetrics.gradedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('approved')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'approved'
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'bg-white text-emerald-900 hover:bg-emerald-50 border border-emerald-200'
+                    }`}
+                  >
+                    A ({activityLearnerMetrics.approvedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('not_approved')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'not_approved'
+                        ? 'bg-rose-700 text-white shadow-xs'
+                        : 'bg-white text-rose-800 hover:bg-rose-50 border border-rose-200'
+                    }`}
+                  >
+                    N ({activityLearnerMetrics.notApprovedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('correction')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'correction'
+                        ? 'bg-orange-600 text-white shadow-xs'
+                        : 'bg-white text-orange-800 hover:bg-orange-50 border border-orange-200'
+                    }`}
+                  >
+                    C ({activityLearnerMetrics.correctionCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivitySubmissionFilterStatus('excluded')}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      activitySubmissionFilterStatus === 'excluded'
+                        ? 'bg-purple-700 text-white shadow-xs'
+                        : 'bg-white text-purple-800 hover:bg-purple-50 border border-purple-200'
+                    }`}
+                  >
+                    Excluidos E ({activityLearnerMetrics.excludedCount})
+                  </button>
+                </div>
+              </div>
+
+              {/* Estado de carga */}
+              {loadingActivitySubmissions ? (
+                <div className="p-12 text-center text-slate-500 space-y-2">
+                  <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
+                  <p className="text-xs font-medium">Consultando evidencias y aprendices en Firestore...</p>
+                </div>
+              ) : filteredActivityLearnerRows.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-2">
+                  <FolderArchive className="w-10 h-10 text-slate-300 mx-auto" />
+                  <h4 className="text-sm font-bold text-slate-700">
+                    No hay aprendices en este filtro
+                  </h4>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    {activityLearnerRows.length === 0
+                      ? 'No hay aprendices matriculados en esta ficha aún. Agrega aprendices desde la pestaña Aprendices.'
+                      : 'Ajusta los criterios de búsqueda o el filtro de estado para ver a los aprendices.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-[#00324D] text-white border-b border-slate-700">
+                          <th className="p-3 font-bold">Aprendiz</th>
+                          <th className="p-3 font-bold">Evidencia / Entrega</th>
+                          <th className="p-3 font-bold">Fecha</th>
+                          <th className="p-3 font-bold text-center">Estado</th>
+                          <th className="p-3 font-bold text-center">Dictamen SENA</th>
+                          <th className="p-3 font-bold text-right">Calificar / Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {filteredActivityLearnerRows.map((row) => {
+                          const sub = row.submission;
+                          return (
+                            <tr key={row.key} className="hover:bg-slate-50/80 transition-colors">
+                              {/* Aprendiz */}
+                              <td className="p-3">
+                                <div className="flex items-center gap-2.5">
+                                  {row.learnerPhoto ? (
+                                    <img
+                                      src={row.learnerPhoto}
+                                      alt={row.learnerName}
+                                      className="w-8 h-8 rounded-full object-cover ring-1 ring-slate-200 shrink-0"
+                                    />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-xs shrink-0 font-mono">
+                                      {row.learnerName.charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <span className="font-bold text-slate-900 block truncate">
+                                      {row.learnerName}
+                                    </span>
+                                    <span className="text-[11px] font-mono text-slate-500 block truncate">
+                                      {row.learnerEmail}
+                                    </span>
+                                    {row.documentNumber && row.documentNumber !== 'No registrado' && (
+                                      <span className="text-[10px] text-slate-400 font-mono">
+                                        CC: {row.documentNumber}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Evidencia / Entrega */}
+                              <td className="p-3 text-slate-800">
+                                {row.hasDelivered ? (
+                                  <div className="space-y-0.5">
+                                    <span className="font-mono text-[11px] font-semibold text-slate-800 truncate block max-w-xs">
+                                      {sub.fileName || sub.activityTitle || 'Archivo adjunto'}
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 px-2 py-0.2 rounded border border-sky-200">
+                                      <CheckCircle2 className="w-2.5 h-2.5 text-sky-600" />
+                                      Entregado
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    <span className="text-[11px] text-slate-400 italic">
+                                      Sin archivo adjunto
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.2 rounded border border-amber-200 block w-fit">
+                                      Pendiente de entrega
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Fecha */}
+                              <td className="p-3 text-slate-500 whitespace-nowrap">
+                                {sub.submittedAt ? (
+                                  <div>
+                                    <span className="block font-medium">
+                                      {new Date(sub.submittedAt).toLocaleDateString('es-CO')}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 font-mono">
+                                      {new Date(sub.submittedAt).toLocaleTimeString('es-CO', {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+
+                              {/* Estado */}
+                              <td className="p-3 text-center whitespace-nowrap">
+                                <StatusBadge
+                                  status={row.isExcluded ? 'excluido' : (sub.status || 'submitted')}
+                                  size="sm"
+                                  customLabel={row.isExcluded ? 'Excluido' : undefined}
+                                />
+                              </td>
+
+                              {/* Dictamen */}
+                              <td className="p-3 text-center whitespace-nowrap">
+                                {row.isExcluded ? (
+                                  <span className="font-mono font-bold px-2.5 py-1 rounded text-xs inline-flex items-center gap-1 bg-purple-100 text-purple-900 border border-purple-300 shadow-2xs">
+                                    <ShieldAlert className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                    Excluido (E)
+                                  </span>
+                                ) : sub.grade ? (
+                                  <span
+                                    className={`font-mono font-black px-2.5 py-1 rounded text-xs inline-flex items-center gap-1 shadow-2xs ${
+                                      sub.grade === 'A'
+                                        ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40'
+                                        : sub.grade === 'C'
+                                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                        : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                    }`}
+                                  >
+                                    {sub.grade === 'A' ? 'A — Aprobado' : sub.grade === 'C' ? 'C — Corregir' : 'N — No aprobado'}
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                    Sin calificar
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Acciones de Calificación */}
+                              <td className="p-3 text-right">
+                                <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                  {/* Ver evidencia (si tiene archivo o enlace) */}
+                                  {row.hasDelivered && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSubmissionToView(sub);
+                                        setIsViewEvidenceModalOpen(true);
+                                      }}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1"
+                                      title="Inspeccionar evidencia"
+                                    >
+                                      <Eye className="w-3.5 h-3.5 text-slate-600" />
+                                      Ver
+                                    </button>
+                                  )}
+
+                                  {/* Evaluación rápida [A] inline */}
+                                  <button
+                                    type="button"
+                                    disabled={gradingSubmissionId === sub.id}
+                                    onClick={() => handleQuickInlineGrade(sub, 'A')}
+                                    className={`px-2.5 py-1 rounded font-black text-[11px] cursor-pointer transition-colors shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      sub.grade === 'A' && !row.isExcluded
+                                        ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40 ring-1 ring-[#39A900]/30'
+                                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                    }`}
+                                    title="Aprobar evidencia (A)"
+                                  >
+                                    A
+                                  </button>
+
+                                  {/* Evaluación rápida [C] inline */}
+                                  <button
+                                    type="button"
+                                    disabled={gradingSubmissionId === sub.id}
+                                    onClick={() => handleQuickInlineGrade(sub, 'C')}
+                                    className={`px-2.5 py-1 rounded font-black text-[11px] cursor-pointer transition-colors shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      sub.grade === 'C' && !row.isExcluded
+                                        ? 'bg-amber-100 text-amber-900 border border-amber-400 ring-1 ring-amber-400/30'
+                                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
+                                    }`}
+                                    title="Solicitar corrección (C)"
+                                  >
+                                    C
+                                  </button>
+
+                                  {/* Evaluación rápida [N] inline */}
+                                  <button
+                                    type="button"
+                                    disabled={gradingSubmissionId === sub.id}
+                                    onClick={() => handleQuickInlineGrade(sub, 'N')}
+                                    className={`px-2.5 py-1 rounded font-black text-[11px] cursor-pointer transition-colors shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      sub.grade === 'N' && !row.isExcluded
+                                        ? 'bg-rose-100 text-rose-900 border border-rose-400 ring-1 ring-rose-400/30'
+                                        : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200'
+                                    }`}
+                                    title="No aprobar evidencia (N)"
+                                  >
+                                    N
+                                  </button>
+
+                                  {/* Botón [E] — Excluir / Exonerar de esta evidencia */}
+                                  <button
+                                    type="button"
+                                    disabled={gradingSubmissionId === sub.id}
+                                    onClick={() => {
+                                      setSelectedRowForExclusion(row);
+                                      setExclusionReasonInput(row.exclusionReason || '');
+                                      setIsExclusionModalOpen(true);
+                                    }}
+                                    className={`px-2.5 py-1 rounded font-black text-[11px] cursor-pointer transition-colors shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                                      row.isExcluded
+                                        ? 'bg-purple-600 hover:bg-purple-700 text-white border border-purple-700 ring-1 ring-purple-400/40'
+                                        : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200'
+                                    }`}
+                                    title={
+                                      row.isExcluded
+                                        ? 'Aprendiz excluido. Clic para consultar o retirar exclusión.'
+                                        : 'Excluir / Exonerar aprendiz de esta evidencia (E)'
+                                    }
+                                  >
+                                    E
+                                  </button>
+
+                                  {/* Calificar detallado con Feedback */}
+                                  <button
+                                    type="button"
+                                    disabled={gradingSubmissionId === sub.id}
+                                    onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'official')}
+                                    className="px-2.5 py-1 bg-[#00324D] hover:bg-[#004A73] text-white rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                                    title="Calificar con retroalimentación pedagógica"
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5 text-[#8CE665]" />
+                                    Feedback
+                                  </button>
+
+                                  {/* Calificar con Rúbrica Pedagógica */}
+                                  {selectedActivityForGrading?.rubricId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'rubric')}
+                                      className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-emerald-200 rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                                      title="Evaluar con Rúbrica Pedagógica"
+                                    >
+                                      <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
+                                      Rúbrica
+                                    </button>
+                                  )}
+
+                                  {/* Drive link directo */}
+                                  {sub.driveFileUrl && (
+                                    <a
+                                      href={sub.driveFileUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="p-1 bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-700 rounded-md transition-colors inline-flex items-center"
+                                      title="Abrir en Google Drive"
+                                    >
+                                      <HardDrive className="w-3.5 h-3.5 text-blue-600" />
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Modal>
+
+          {/* =========================================================================
+              MODAL DE CALIFICACIÓN MASIVA («CALIFICAR TODO» — OPCIONES A, B Y C)
+             ========================================================================= */}
+          <Modal
+            isOpen={isBulkModalOpen}
+            onClose={() => {
+              if (!isExecutingBulk) {
+                setIsBulkModalOpen(false);
+                setBulkResultSummary(null);
+              }
+            }}
+            title={
+              bulkMode === 'all'
+                ? 'Opción A — Calificar a Todos los Aprendices'
+                : bulkMode === 'unsubmitted_n'
+                ? 'Opción B — Calificar como No Aprobado (N) a Sin Entrega'
+                : 'Opción C — Calificar como Aprobado (A) a Quienes Entregaron'
+            }
+            subtitle={`Ficha #${activeFicha?.number || ''} · ${selectedActivityForGrading?.title || 'Actividad Formativa'}`}
+            maxWidth="2xl"
+          >
+            {bulkResultSummary ? (
+              // Resumen final de la operación masiva
+              <div className="space-y-4">
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-center space-y-1">
+                  <CheckCircle2 className="w-8 h-8 text-[#39A900] mx-auto" />
+                  <h4 className="text-sm font-bold text-emerald-900">
+                    Proceso de Calificación Masiva Finalizado
+                  </h4>
+                  <p className="text-xs text-emerald-700">
+                    Se procesaron exitosamente {bulkResultSummary.successCount} de {bulkResultSummary.totalProcessed} registros en Firestore.
+                  </p>
+                </div>
+
+                {bulkResultSummary.failedItems.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-1">
+                      <span className="font-bold text-rose-800 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-rose-600" />
+                        {bulkResultSummary.failedItems.length} aprendices presentaron errores al guardar:
+                      </span>
+                      <ul className="divide-y divide-rose-100 text-[11px] text-rose-700 max-h-40 overflow-y-auto">
+                        {bulkResultSummary.failedItems.map((fail) => (
+                          <li key={fail.learnerId} className="py-1.5 flex justify-between gap-2">
+                            <span className="font-semibold">{fail.learnerName}</span>
+                            <span className="italic text-rose-600 truncate max-w-xs">{fail.error}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rowsToRetry = bulkResultSummary.failedItems.map((f) => f.row);
+                          handleStartBulkGrading(
+                            rowsToRetry,
+                            bulkMode!,
+                            bulkMode === 'unsubmitted_n' ? 'N' : bulkMode === 'delivered_a' ? 'A' : bulkGradeChoice,
+                            bulkFeedbackText
+                          );
+                        }}
+                        disabled={isExecutingBulk}
+                        className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Reintentar únicamente fallidos ({bulkResultSummary.failedItems.length})
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-2">
+                    <p className="text-xs text-slate-500">
+                      Todas las calificaciones fueron asentadas y los aprendices han sido notificados.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-3 border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsBulkModalOpen(false);
+                      setBulkResultSummary(null);
+                    }}
+                    className="px-4 py-2 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold cursor-pointer"
+                  >
+                    Aceptar y Volver a la Planilla
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Vista de confirmación y selección previa
+              <div className="space-y-4 text-xs text-slate-700">
+                {/* Métricas del alcance de la operación */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                    <span className="text-[11px] text-slate-500 block">Total Aprendices</span>
+                    <strong className="text-sm font-bold text-slate-900 font-mono">
+                      {activityLearnerMetrics.total}
+                    </strong>
+                  </div>
+                  <div className="p-2.5 bg-[#EBF8E7] border border-[#39A900]/30 rounded-xl">
+                    <span className="text-[11px] text-emerald-800 block">Aprendices a calificar</span>
+                    <strong className="text-sm font-bold text-[#2E8500] font-mono">
+                      {bulkTargetRows.length}
+                    </strong>
+                  </div>
+                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-xl">
+                    <span className="text-[11px] text-sky-800 block">Con entrega</span>
+                    <strong className="text-sm font-bold text-sky-900 font-mono">
+                      {bulkTargetRows.filter((r) => r.hasDelivered).length}
+                    </strong>
+                  </div>
+                  <div className="p-2.5 bg-purple-50 border border-purple-200 rounded-xl">
+                    <span className="text-[11px] text-purple-800 block">Excluidos (protegidos)</span>
+                    <strong className="text-sm font-bold text-purple-900 font-mono">
+                      {activityLearnerMetrics.excludedCount}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Explicación pedagógica según modo */}
+                {bulkMode === 'all' && (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                      <p className="text-amber-900 leading-relaxed font-medium">
+                        Selecciona el dictamen oficial SENA que deseas aplicar a los <strong>{bulkTargetRows.length}</strong> aprendices evaluables de la ficha. Esta acción no se aplica automáticamente con A; debes elegir explícitamente el dictamen.
+                      </p>
+                    </div>
+
+                    {/* Selector de dictamen para Opción A */}
+                    <div>
+                      <label className="block font-bold text-slate-800 mb-1.5">
+                        Dictamen oficial a aplicar:
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBulkGradeChoice('A')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            bulkGradeChoice === 'A'
+                              ? 'bg-[#EBF8E7] text-[#2E8500] border-[#39A900] ring-2 ring-[#39A900]/30 font-bold'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="font-mono text-base block font-black">A</span>
+                          <span className="text-[11px] block">Aprobado</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBulkGradeChoice('N')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            bulkGradeChoice === 'N'
+                              ? 'bg-rose-50 text-rose-800 border-rose-400 ring-2 ring-rose-400/30 font-bold'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="font-mono text-base block font-black">N</span>
+                          <span className="text-[11px] block">No Aprobado</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBulkGradeChoice('C')}
+                          className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            bulkGradeChoice === 'C'
+                              ? 'bg-amber-50 text-amber-900 border-amber-400 ring-2 ring-amber-400/30 font-bold'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="font-mono text-base block font-black">C</span>
+                          <span className="text-[11px] block">Por Corregir</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {bulkMode === 'unsubmitted_n' && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5">
+                    <span className="font-bold text-rose-900 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600" />
+                      Calificación de no presentación
+                    </span>
+                    <p className="text-rose-800 leading-relaxed text-[11px]">
+                      Se aplicará dictamen <strong>N — No aprobado</strong> exclusivamente a los <strong>{bulkTargetRows.length}</strong> aprendices que no han radicado ninguna evidencia. No se crearán archivos ni evidencias ficticias; se asentará formalmente el registro de evaluación por no presentación. Las calificaciones de quienes sí entregaron no serán modificadas.
+                    </p>
+                  </div>
+                )}
+
+                {bulkMode === 'delivered_a' && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1.5">
+                    <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600" />
+                      Advertencia Pedagógica Obligatoria
+                    </span>
+                    <p className="text-amber-800 leading-relaxed text-[11px]">
+                      Al ejecutar esta operación, el instructor asume formalmente la decisión académica de calificar como <strong>A — APROBADO</strong> a las <strong>{bulkTargetRows.length}</strong> evidencias radicadas sin realizar una revisión pormenorizada individual. Quienes no entregaron evidencia no serán modificados.
+                    </p>
+                  </div>
+                )}
+
+                {/* Campo de retroalimentación general opcional */}
+                <div>
+                  <label className="block font-bold text-slate-800 mb-1">
+                    Retroalimentación pedagógica a adjuntar:
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={bulkFeedbackText}
+                    onChange={(e) => setBulkFeedbackText(e.target.value)}
+                    placeholder="Escribe la retroalimentación institucional o deja en blanco para usar la oficial..."
+                    className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-[#39A900] resize-none"
+                  />
+                </div>
+
+                {/* Barra de progreso interactiva si está en ejecución */}
+                {isExecutingBulk && (
+                  <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl space-y-2 animate-in fade-in">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#39A900]" />
+                        Procesando en Firestore: {bulkProgress.currentName}
+                      </span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {bulkProgress.current} de {bulkProgress.total} ({Math.round((bulkProgress.current / (bulkProgress.total || 1)) * 100)}%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                      <div
+                        className="bg-[#39A900] h-full transition-all duration-150"
+                        style={{
+                          width: `${Math.round((bulkProgress.current / (bulkProgress.total || 1)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Botones de acción del Modal */}
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                  <button
+                    type="button"
+                    disabled={isExecutingBulk}
+                    onClick={() => setIsBulkModalOpen(false)}
+                    className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isExecutingBulk || bulkTargetRows.length === 0}
+                    onClick={() => {
+                      const gradeToApply: AcademicGradeCode =
+                        bulkMode === 'unsubmitted_n' ? 'N' : bulkMode === 'delivered_a' ? 'A' : bulkGradeChoice;
+                      handleStartBulkGrading(bulkTargetRows, bulkMode!, gradeToApply, bulkFeedbackText);
+                    }}
+                    className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                  >
+                    {isExecutingBulk && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>
+                      {isExecutingBulk
+                        ? 'Calificando en lote...'
+                        : `Confirmar y Calificar (${bulkTargetRows.length})`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          {/* =========================================================================
+              MODAL DE EXCLUSIÓN INDIVIDUAL DE APRENDIZ (BOTÓN E - EXCLUIR)
+             ========================================================================= */}
+          <Modal
+            isOpen={isExclusionModalOpen}
+            onClose={() => {
+              if (!isSavingExclusion) {
+                setIsExclusionModalOpen(false);
+                setSelectedRowForExclusion(null);
+              }
+            }}
+            title={
+              selectedRowForExclusion?.isExcluded
+                ? 'Retirar Exclusión de Evidencia Formativa'
+                : 'Excluir Aprendiz de Evidencia Formativa (E)'
+            }
+            subtitle={selectedActivityForGrading?.title || 'Actividad Formativa'}
+            maxWidth="md"
+          >
+            {selectedRowForExclusion && (
+              <div className="space-y-4 text-xs text-slate-700">
+                {/* Tarjeta del Aprendiz */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
+                  {selectedRowForExclusion.learnerPhoto ? (
+                    <img
+                      src={selectedRowForExclusion.learnerPhoto}
+                      alt={selectedRowForExclusion.learnerName}
+                      className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-800 font-bold flex items-center justify-center text-sm shrink-0 font-mono">
+                      {selectedRowForExclusion.learnerName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <strong className="text-slate-900 block truncate text-sm">
+                      {selectedRowForExclusion.learnerName}
+                    </strong>
+                    <span className="text-slate-500 block truncate font-mono text-[11px]">
+                      {selectedRowForExclusion.learnerEmail}
+                    </span>
+                    {selectedRowForExclusion.documentNumber && selectedRowForExclusion.documentNumber !== 'No registrado' && (
+                      <span className="text-slate-400 font-mono text-[10px]">
+                        CC: {selectedRowForExclusion.documentNumber}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {selectedRowForExclusion.isExcluded ? (
+                  // Caso: Ya está excluido -> Permitir retirar la exclusión
+                  <div className="space-y-3">
+                    <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl space-y-1.5">
+                      <span className="font-bold text-purple-900 flex items-center gap-1.5">
+                        <ShieldAlert className="w-4 h-4 text-purple-600" />
+                        Exclusión activa registrada
+                      </span>
+                      <p className="text-purple-800 leading-relaxed text-[11px]">
+                        Este aprendiz se encuentra actualmente exonerado de esta evidencia formativa.
+                      </p>
+                      {selectedRowForExclusion.excludedAt && (
+                        <p className="text-[11px] text-purple-700">
+                          <strong>Fecha:</strong> {new Date(selectedRowForExclusion.excludedAt).toLocaleDateString('es-CO')}
+                        </p>
+                      )}
+                      {selectedRowForExclusion.excludedByName && (
+                        <p className="text-[11px] text-purple-700">
+                          <strong>Registrado por:</strong> {selectedRowForExclusion.excludedByName}
+                        </p>
+                      )}
+                      {selectedRowForExclusion.exclusionReason && (
+                        <p className="text-[11px] text-purple-700">
+                          <strong>Motivo:</strong> {selectedRowForExclusion.exclusionReason}
+                        </p>
+                      )}
+                    </div>
+
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      Al retirar la exclusión, el aprendiz volverá a ser evaluable para esta actividad, se computará en los pendientes de entrega y podrá ser calificado individual o masivamente.
+                    </p>
+
+                    <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                      <button
+                        type="button"
+                        disabled={isSavingExclusion}
+                        onClick={() => setIsExclusionModalOpen(false)}
+                        className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingExclusion}
+                        onClick={handleRemoveExclusion}
+                        className="px-4 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                      >
+                        {isSavingExclusion && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                        <span>Retirar Exclusión (Rehabilitar)</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Caso: No está excluido -> Confirmar exclusión
+                  <div className="space-y-3">
+                    <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl space-y-1.5">
+                      <span className="font-bold text-purple-900 flex items-center gap-1.5">
+                        <Info className="w-4 h-4 text-purple-700" />
+                        Alcance de la Exclusión Pedagógica
+                      </span>
+                      <p className="text-purple-800 leading-relaxed text-[11px]">
+                        Al excluir al aprendiz, este quedará exonerado de radicar y calificar esta evidencia específica. No afectará su matrícula en la ficha ni sus calificaciones en otras actividades. Se omitirá de los conteos de pendientes y de las operaciones masivas.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-800 mb-1">
+                        Motivo pedagógico de la exclusión (opcional):
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={exclusionReasonInput}
+                        onChange={(e) => setExclusionReasonInput(e.target.value)}
+                        placeholder="Ej: Exonerado por homologación de competencias, incapacidad médica o acuerdo pedagógico..."
+                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-purple-600 resize-none"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                      <button
+                        type="button"
+                        disabled={isSavingExclusion}
+                        onClick={() => setIsExclusionModalOpen(false)}
+                        className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingExclusion}
+                        onClick={handleConfirmExclusion}
+                        className="px-4 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                      >
+                        {isSavingExclusion && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                        <span>Confirmar Exclusión (E)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Modal>
+
+          {/* =========================================================================
+              PROMPT 33: MODAL 2 — CALIFICACIÓN INDIVIDUAL A/N/C & RÚBRICA PEDAGÓGICA
+              Reutiliza exactamente los componentes y reglas de InstructorSubmissionsView
+             ========================================================================= */}
+          {selectedSubmissionForGrade && (
+            <Modal
+              isOpen={isGradingModalOpen}
+              onClose={() => setIsGradingModalOpen(false)}
+              title="Calificar Evidencia Pedagógica"
+              subtitle={`${selectedSubmissionForGrade.learnerName || 'Aprendiz'} · ${selectedSubmissionForGrade.activityTitle || selectedActivityForGrading?.title || 'Actividad Formativa'}`}
+              footer={
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setIsGradingModalOpen(false)}
+                    className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveGradeModal}
+                    disabled={isSavingGrade}
+                    className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                  >
+                    {isSavingGrade && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{isSavingGrade ? 'Guardando dictamen...' : 'Guardar Dictamen'}</span>
+                  </button>
+                </>
+              }
+            >
+              <div className="space-y-4">
+                {/* Mensaje de validación o error */}
+                {gradingModalError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <span className="font-bold block">No se pudo guardar la calificación:</span>
+                      <span>{gradingModalError}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Pestañas de Dictamen Oficial vs Rúbrica Pedagógica */}
+                {currentRubric && (
+                  <div className="flex border-b border-slate-200 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveGradingTab('official')}
+                      className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                        activeGradingTab === 'official'
+                          ? 'border-[#39A900] text-[#00324D]'
+                          : 'border-transparent text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                      <span>Dictamen Oficial A/N/C</span>
+                      <span className="text-[10px] bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-black">
+                        {selectedGradeCode}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveGradingTab('rubric')}
+                      className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                        activeGradingTab === 'rubric'
+                          ? 'border-[#39A900] text-[#00324D]'
+                          : 'border-transparent text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
+                      <span>Rúbrica Pedagógica</span>
+                      {rubricResults ? (
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                          {rubricResults.percentage}%
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
+                          Por evaluar
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Pestaña: Rúbrica Pedagógica */}
+                {activeGradingTab === 'rubric' && currentRubric ? (
+                  <div className="space-y-4">
+                    <RubricEvaluationForm
+                      rubric={currentRubric}
+                      initialResults={rubricResults?.criteriaResults}
+                      onResultsChange={(res) => {
+                        setRubricResults(res);
+                      }}
+                    />
+
+                    {/* Panel de Puntos, Porcentaje, Sugerencia y Dictamen Oficial */}
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                            Puntaje Obtenido
+                          </span>
+                          <div className="flex items-baseline gap-1 text-slate-900">
+                            <span className="text-2xl font-black text-[#2E8500]">
+                              {rubricResults?.totalPoints || 0}
+                            </span>
+                            <span className="text-xs font-bold text-slate-500">
+                              / {rubricResults?.totalPossiblePoints || currentRubric.totalPoints} pts
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                            Porcentaje
+                          </span>
+                          <span className="text-2xl font-black text-[#00324D]">
+                            {rubricResults?.percentage || 0}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Sugerencia pedagógica orientativa */}
+                      <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold text-blue-950">
+                          <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                          <span>Sugerencia pedagógica orientativa:</span>
+                        </div>
+                        <p className="text-[11px] text-blue-900 leading-relaxed">
+                          {rubricResults
+                            ? rubricResults.percentage >= 70
+                              ? 'Desempeño formativo acorde con los estándares esperados (Referencia orientativa: Cumple con los criterios de evaluación formativos).'
+                              : rubricResults.percentage >= 50
+                              ? 'Se identifican aspectos específicos por fortalecer (Referencia orientativa: Oportunidad de corrección o ajuste puntual).'
+                              : 'Criterios mínimos aún no alcanzados (Referencia orientativa: No cumple con los requerimientos esenciales).'
+                            : 'Califica los criterios en la rúbrica arriba para obtener una orientación formativa.'}
+                        </p>
+                        <p className="text-[10px] text-blue-800 italic pt-1 border-t border-blue-100">
+                          * Nota institucional: Esta sugerencia es meramente formativa. El instructor debe seleccionar explícitamente el Resultado Oficial SENA a continuación.
+                        </p>
+                      </div>
+
+                      {/* Selector Explícito de Dictamen Oficial SENA [ A ] [ N ] [ C ] */}
+                      <div className="space-y-2 pt-1 border-t border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-slate-800">
+                            Resultado Oficial SENA *
+                          </label>
+                          <span className="text-xs font-bold text-slate-600">
+                            Seleccionado:{' '}
+                            <strong
+                              className={
+                                selectedGradeCode === 'A'
+                                  ? 'text-[#2E8500]'
+                                  : selectedGradeCode === 'C'
+                                  ? 'text-amber-700'
+                                  : 'text-rose-600'
+                              }
+                            >
+                              {selectedGradeCode === 'A'
+                                ? 'A (Aprobado)'
+                                : selectedGradeCode === 'C'
+                                ? 'C (Por corregir)'
+                                : 'N (No aprobado)'}
+                            </strong>
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2.5">
+                          {/* [ A ] */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedGradeCode('A')}
+                            className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                              selectedGradeCode === 'A'
+                                ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
+                                : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                            }`}
+                          >
+                            <div className="text-xl font-black">A</div>
+                            <div className="text-xs font-bold">APROBADO</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
+                          </button>
+
+                          {/* [ N ] */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedGradeCode('N')}
+                            className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                              selectedGradeCode === 'N'
+                                ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
+                                : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                            }`}
+                          >
+                            <div className="text-xl font-black">N</div>
+                            <div className="text-xs font-bold">NO APROBADO</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
+                          </button>
+
+                          {/* [ C ] */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedGradeCode('C')}
+                            className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                              selectedGradeCode === 'C'
+                                ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
+                                : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                            }`}
+                          >
+                            <div className="text-xl font-black">C</div>
+                            <div className="text-xs font-bold">CORREGIR</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Retroalimentación en la pestaña de rúbrica */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-800 mb-1">
+                          Retroalimentación General del Instructor {selectedGradeCode === 'C' && '*'}
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={feedbackInput}
+                          onChange={(e) => setFeedbackInput(e.target.value)}
+                          placeholder={
+                            selectedGradeCode === 'C'
+                              ? 'Indica con claridad qué aspectos debe corregir el aprendiz para su nueva entrega...'
+                              : 'Comentarios formativos adicionales para el aprendiz...'
+                          }
+                          className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#39A900] text-slate-800 bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Pestaña: Dictamen Oficial A/N/C */}
+                    {rubricResults && (
+                      <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-xs flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Sliders className="w-4 h-4 text-[#00324D]" />
+                          <span className="text-slate-800">
+                            Evaluación con Rúbrica: <strong>{rubricResults.percentage}%</strong> ({rubricResults.totalPoints}/{rubricResults.totalPossiblePoints} pts)
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveGradingTab('rubric')}
+                          className="text-[11px] font-bold text-sky-800 hover:underline cursor-pointer"
+                        >
+                          Ajustar criterios
+                        </button>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-800 mb-2">
+                        Resultado Oficial SENA (Dictamen) *
+                      </label>
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {/* [ A ] */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGradeCode('A')}
+                          className={`p-3.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            selectedGradeCode === 'A'
+                              ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
+                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                          }`}
+                        >
+                          <div className="text-2xl font-black">A</div>
+                          <div className="text-xs font-bold mt-1">APROBADO</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
+                        </button>
+
+                        {/* [ N ] */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGradeCode('N')}
+                          className={`p-3.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            selectedGradeCode === 'N'
+                              ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
+                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                          }`}
+                        >
+                          <div className="text-2xl font-black">N</div>
+                          <div className="text-xs font-bold mt-1">NO APROBADO</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
+                        </button>
+
+                        {/* [ C ] */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGradeCode('C')}
+                          className={`p-3.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            selectedGradeCode === 'C'
+                              ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
+                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                          }`}
+                        >
+                          <div className="text-2xl font-black">C</div>
+                          <div className="text-xs font-bold mt-1">CORREGIR</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Retroalimentación escrita */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-800">
+                          Retroalimentación del Instructor {selectedGradeCode === 'C' && '*'}
+                        </label>
+                        {selectedGradeCode === 'C' && (
+                          <span className="text-[11px] font-bold text-amber-700">
+                            * Obligatoria para dictamen C
+                          </span>
+                        )}
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={feedbackInput}
+                        onChange={(e) => setFeedbackInput(e.target.value)}
+                        placeholder={
+                          selectedGradeCode === 'C'
+                            ? 'Explica detalladamente qué debe corregir o ajustar el aprendiz para su nueva entrega...'
+                            : selectedGradeCode === 'N'
+                            ? 'Indica los motivos formativos de la no aprobación...'
+                            : 'Observaciones o felicitaciones por el desempeño...'
+                        }
+                        className={`w-full px-3.5 py-2.5 text-xs border rounded-xl focus:outline-none focus:ring-2 focus:ring-[#39A900] text-slate-800 bg-white ${
+                          selectedGradeCode === 'C' && !feedbackInput.trim()
+                            ? 'border-amber-300 bg-amber-50/30'
+                            : 'border-slate-200'
+                        }`}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Resumen de la evidencia evaluada */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
+                  <span className="font-bold text-slate-700 block">Detalles de la entrega:</span>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                    <div>
+                      <span>Tipo: </span>
+                      <strong className="font-mono text-slate-800">
+                        {selectedSubmissionForGrade.submissionType || 'documento'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Versión: </span>
+                      <strong className="font-mono text-slate-800">
+                        v{selectedSubmissionForGrade.version || 1}
+                      </strong>
+                    </div>
+                    {selectedSubmissionForGrade.driveFileUrl && (
+                      <div className="col-span-2">
+                        <a
+                          href={selectedSubmissionForGrade.driveFileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+                        >
+                          <HardDrive className="w-3 h-3 text-[#39A900]" />
+                          <span>Ver archivo entregado en Google Drive</span>
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* Modal Inspección Detallada de Evidencia */}
+          {submissionToView && (
+            <Modal
+              isOpen={isViewEvidenceModalOpen}
+              onClose={() => {
+                setIsViewEvidenceModalOpen(false);
+                setSubmissionToView(null);
+              }}
+              title="Inspección de Evidencia de Aprendizaje"
+              subtitle={`${submissionToView.learnerName || 'Aprendiz'} · ${submissionToView.activityTitle || 'Actividad Formativa'}`}
+            >
+              <div className="space-y-4">
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Aprendiz:</span>
+                    <strong className="text-slate-900">{submissionToView.learnerName}</strong>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Correo:</span>
+                    <strong className="font-mono text-slate-800">{submissionToView.learnerEmail}</strong>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Fecha de Entrega:</span>
+                    <strong className="text-slate-800">
+                      {submissionToView.submittedAt
+                        ? new Date(submissionToView.submittedAt).toLocaleString('es-CO')
+                        : 'No registrada'}
+                    </strong>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Estado:</span>
+                    <StatusBadge status={(submissionToView.status || 'submitted') as any} size="sm" />
+                  </div>
+                  {submissionToView.grade && (
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                      <span className="text-slate-500">Dictamen Actual:</span>
+                      <strong className="font-black text-xs text-[#2E8500] font-mono">
+                        {submissionToView.grade}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+
+                {/* Contenido / Enlace / Archivo de la Evidencia */}
+                {submissionToView.driveFileUrl || submissionToView.driveFileId ? (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
+                    <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs">
+                      <HardDrive className="w-4 h-4 text-[#39A900]" />
+                      <span>Evidencia alojada en Google Drive</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-800">
+                      Archivo: <strong>{submissionToView.fileName || 'evidencia_adjunta'}</strong>
+                    </p>
+                    <div className="pt-2">
+                      <a
+                        href={submissionToView.driveFileUrl || `https://drive.google.com/file/d/${submissionToView.driveFileId}/view`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-[#8CE665]" />
+                        <span>Abrir Evidencia en Google Drive</span>
+                      </a>
+                    </div>
+                  </div>
+                ) : submissionToView.externalUrl ? (
+                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
+                    <span className="text-xs font-bold text-blue-900 block">Enlace Externo Presentado:</span>
+                    <a
+                      href={submissionToView.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-700 hover:underline break-all block font-semibold"
+                    >
+                      {submissionToView.externalUrl}
+                    </a>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 italic">
+                    "{submissionToView.textContent || 'Sin contenido textual'}"
+                  </div>
+                )}
+
+                {/* Retroalimentación actual registrada */}
+                {submissionToView.feedback && (
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
+                    <span className="font-bold text-slate-700 block">Última Retroalimentación Registrada:</span>
+                    <p className="italic text-slate-800">{submissionToView.feedback}</p>
+                    <div className="text-[10px] text-slate-400 pt-1">
+                      Evaluado por: {submissionToView.gradedBy || 'Instructor'} el{' '}
+                      {submissionToView.gradedAt ? submissionToView.gradedAt.split('T')[0] : 'N/A'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Modal>
+          )}
+
+          {/* Modal Historial de Entregas y Versiones (PROMPT 34 & Sección 3.F) */}
+          {selectedSubmissionForHistory && (
+            <Modal
+              isOpen={isHistoryModalOpen}
+              onClose={() => {
+                setIsHistoryModalOpen(false);
+                setSelectedSubmissionForHistory(null);
+              }}
+              title="Historial de Entregas y Versiones"
+              subtitle={`${selectedSubmissionForHistory.learnerName || 'Aprendiz'} · ${selectedSubmissionForHistory.activityTitle || 'Actividad Formativa'}`}
+            >
+              <div className="space-y-4">
+                <p className="text-xs text-slate-600">
+                  Registro histórico institucional de todas las versiones radicadas por el aprendiz y sus correspondientes dictámenes formativos.
+                </p>
+
+                <div className="space-y-3">
+                  {(selectedSubmissionForHistory.submissionHistory || []).map((h, idx) => (
+                    <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800">Entrega Versión {h.version}</span>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {h.submittedAt ? new Date(h.submittedAt).toLocaleString('es-CO') : 'Fecha anterior'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-600">Dictamen:</span>
+                        <span
+                          className={`font-black px-2 py-0.5 rounded text-[11px] ${
+                            h.grade === 'A'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : h.grade === 'N'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {h.grade || h.status}
+                        </span>
+                      </div>
+                      {h.feedback && (
+                        <div className="text-[11px] text-slate-600 italic bg-white p-2 rounded border border-slate-200">
+                          "{h.feedback}"
+                        </div>
+                      )}
+                      {h.driveFileId && (
+                        <a
+                          href={h.driveUrl || h.driveFileUrl || `https://drive.google.com/file/d/${h.driveFileId}/view`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 font-semibold pt-1"
+                        >
+                          <HardDrive className="w-3 h-3 text-[#39A900]" />
+                          <span>Ver archivo de esta entrega ({h.fileName || 'evidencia'})</span>
+                        </a>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Versión Vigente Actual */}
+                  <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-200 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-950">
+                        Versión Vigente Actual (v{selectedSubmissionForHistory.version || 1})
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-800">
+                        {new Date(selectedSubmissionForHistory.submittedAt).toLocaleString('es-CO')}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-700">Estado actual:</span>
+                      <span className="font-black text-xs text-slate-900">
+                        {selectedSubmissionForHistory.grade || selectedSubmissionForHistory.status}
+                      </span>
+                    </div>
+                    {selectedSubmissionForHistory.feedback && (
+                      <p className="text-[11px] text-emerald-900 italic bg-white p-2 rounded border border-emerald-200">
+                        "{selectedSubmissionForHistory.feedback}"
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* Modal Consulta Detallada de Rúbrica Pedagógica */}
+          {isRubricViewModalOpen && selectedRubricEvaluationForView && (
+            <RubricEvaluationViewModal
+              isOpen={isRubricViewModalOpen}
+              onClose={() => {
+                setIsRubricViewModalOpen(false);
+                setSelectedRubricEvaluationForView(null);
+              }}
+              evaluation={selectedRubricEvaluationForView}
+            />
+          )}
+
+          {/* Toast flotante de confirmación */}
+          {toastMessage && (
+            <div className="fixed bottom-6 right-6 z-50 bg-[#00324D] text-white px-4 py-3 rounded-xl shadow-lg border border-[#39A900] flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-bottom-4 duration-200">
+              <CheckCircle2 className="w-4 h-4 text-[#8CE665] shrink-0" />
+              <span>{toastMessage}</span>
+            </div>
+          )}
         </div>
       );
     }
@@ -3234,683 +5893,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
           </div>
         )}
       </Modal>
-
-      {/* =========================================================================
-          PROMPT 33: MODAL 1 — ENTREGAS DE LA ACTIVIDAD (CALIFICAR EVIDENCIAS)
-          Filtrado automáticamente por fichaId = activeFicha.id y activityId
-         ========================================================================= */}
-      <Modal
-        isOpen={isActivitySubmissionsModalOpen}
-        onClose={() => {
-          setIsActivitySubmissionsModalOpen(false);
-          setSelectedActivityForGrading(null);
-        }}
-        title={`Calificar Evidencias — ${selectedActivityForGrading?.title || 'Actividad Formativa'}`}
-        subtitle={`Ficha #${activeFicha?.number || ''} · ${activeFicha?.name || activeFicha?.programName || ''}`}
-      >
-        <div className="space-y-4">
-          {/* Cabecera y Filtros de Estado */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
-            <div>
-              <p className="text-xs text-slate-600">
-                Evidencias entregadas por aprendices matriculados en esta ficha para esta actividad específica.
-              </p>
-              {selectedActivityForGrading?.rubricId && (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 mt-1">
-                  <Sliders className="w-3 h-3 text-[#39A900]" />
-                  Evaluación con Rúbrica Pedagógica disponible
-                </span>
-              )}
-            </div>
-
-            {/* Filtros de estado */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setActivitySubmissionFilterStatus('all')}
-                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                  activitySubmissionFilterStatus === 'all'
-                    ? 'bg-[#00324D] text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                Todas ({activitySubmissionsList.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivitySubmissionFilterStatus('pending')}
-                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                  activitySubmissionFilterStatus === 'pending'
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
-                }`}
-              >
-                Por calificar (
-                {
-                  activitySubmissionsList.filter(
-                    (s) => s.status === 'submitted' || s.status === 'under_review' || !s.grade
-                  ).length
-                }
-                )
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivitySubmissionFilterStatus('graded')}
-                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                  activitySubmissionFilterStatus === 'graded'
-                    ? 'bg-[#39A900] text-white'
-                    : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                }`}
-              >
-                Calificadas ({activitySubmissionsList.filter((s) => Boolean(s.grade)).length})
-              </button>
-            </div>
-          </div>
-
-          {/* Estado de carga */}
-          {loadingActivitySubmissions ? (
-            <div className="p-12 text-center text-slate-500 space-y-2">
-              <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
-              <p className="text-xs font-medium">Consultando evidencias en Firestore...</p>
-            </div>
-          ) : (() => {
-            const filteredSubs = activitySubmissionsList.filter((sub) => {
-              if (activitySubmissionFilterStatus === 'pending') {
-                return sub.status === 'submitted' || sub.status === 'under_review' || !sub.grade;
-              }
-              if (activitySubmissionFilterStatus === 'graded') {
-                return Boolean(sub.grade);
-              }
-              return true;
-            });
-
-            if (filteredSubs.length === 0) {
-              return (
-                <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center space-y-2">
-                  <FolderArchive className="w-10 h-10 text-slate-300 mx-auto" />
-                  <h4 className="text-sm font-bold text-slate-700">
-                    No hay evidencias para esta actividad en este filtro
-                  </h4>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                    Cuando los aprendices de la ficha envíen sus evidencias para esta actividad, aparecerán aquí para evaluarlas.
-                  </p>
-                </div>
-              );
-            }
-
-            return (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-[#00324D] text-white border-b border-slate-700">
-                      <th className="p-3 font-bold">Aprendiz</th>
-                      <th className="p-3 font-bold">Evidencia</th>
-                      <th className="p-3 font-bold">Fecha de envío</th>
-                      <th className="p-3 font-bold text-center">Estado</th>
-                      <th className="p-3 font-bold text-center">Dictamen</th>
-                      <th className="p-3 font-bold text-right">Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {filteredSubs.map((sub) => (
-                      <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3 font-bold text-slate-900">
-                          {sub.learnerName || sub.learnerEmail || 'Aprendiz'}
-                        </td>
-                        <td className="p-3 text-slate-800">
-                          <span className="font-mono text-[11px] truncate block max-w-xs">
-                            {sub.fileName || sub.activityTitle || 'Archivo adjunto'}
-                          </span>
-                        </td>
-                        <td className="p-3 text-slate-500 whitespace-nowrap">
-                          {new Date(sub.submittedAt).toLocaleDateString('es-CO')}
-                        </td>
-                        <td className="p-3 text-center">
-                          <StatusBadge status={sub.status as any} size="sm" />
-                        </td>
-                        <td className="p-3 text-center">
-                          {sub.grade ? (
-                            <span
-                              className={`font-mono font-black px-2.5 py-0.5 rounded text-xs ${
-                                sub.grade === 'A'
-                                  ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/30'
-                                  : sub.grade === 'C'
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                  : 'bg-rose-100 text-rose-800 border border-rose-300'
-                              }`}
-                            >
-                              {sub.grade}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                              Pendiente
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                            {/* Ver evidencia en modal / drive */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSubmissionToView(sub);
-                                setIsViewEvidenceModalOpen(true);
-                              }}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1"
-                              title="Inspeccionar evidencia"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-slate-600" />
-                              Ver
-                            </button>
-
-                            {/* Evaluación rápida [A] inline */}
-                            <button
-                              type="button"
-                              onClick={() => handleQuickInlineGrade(sub, 'A')}
-                              className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                sub.grade === 'A'
-                                  ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/40 ring-1 ring-[#39A900]/30'
-                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              }`}
-                              title="Aprobar evidencia (A)"
-                            >
-                              A
-                            </button>
-
-                            {/* Evaluación rápida [C] inline */}
-                            <button
-                              type="button"
-                              onClick={() => handleQuickInlineGrade(sub, 'C')}
-                              className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                sub.grade === 'C'
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-400 ring-1 ring-amber-400/30'
-                                  : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
-                              }`}
-                              title="Solicitar corrección (C)"
-                            >
-                              C
-                            </button>
-
-                            {/* Evaluación rápida [N] inline */}
-                            <button
-                              type="button"
-                              onClick={() => handleQuickInlineGrade(sub, 'N')}
-                              className={`px-2 py-1 rounded font-black text-[11px] cursor-pointer transition-colors ${
-                                sub.grade === 'N'
-                                  ? 'bg-rose-100 text-rose-900 border border-rose-400 ring-1 ring-rose-400/30'
-                                  : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200'
-                              }`}
-                              title="No aprobar evidencia (N)"
-                            >
-                              N
-                            </button>
-
-                            {/* Calificar detallado con Feedback */}
-                            <button
-                              type="button"
-                              onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'official')}
-                              className="px-2.5 py-1 bg-[#00324D] hover:bg-[#004A73] text-white rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1"
-                              title="Editar calificación y retroalimentación"
-                            >
-                              <MessageSquare className="w-3.5 h-3.5 text-[#8CE665]" />
-                              Feedback
-                            </button>
-
-                            {/* Calificar con Rúbrica Pedagógica */}
-                            {selectedActivityForGrading?.rubricId && (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenGradingModal(sub, (sub.grade as AcademicGradeCode) || 'A', 'rubric')}
-                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-emerald-200 rounded-md font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1"
-                                title="Evaluar con Rúbrica Pedagógica"
-                              >
-                                <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
-                                Rúbrica
-                              </button>
-                            )}
-
-                            {/* Drive link directo */}
-                            {sub.driveFileUrl && (
-                              <a
-                                href={sub.driveFileUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="p-1 bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-700 rounded-md transition-colors inline-flex items-center"
-                                title="Abrir en Google Drive"
-                              >
-                                <HardDrive className="w-3.5 h-3.5 text-blue-600" />
-                              </a>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-        </div>
-      </Modal>
-
-      {/* =========================================================================
-          PROMPT 33: MODAL 2 — CALIFICACIÓN INDIVIDUAL A/N/C & RÚBRICA PEDAGÓGICA
-          Reutiliza exactamente los componentes y reglas de InstructorSubmissionsView
-         ========================================================================= */}
-      {selectedSubmissionForGrade && (
-        <Modal
-          isOpen={isGradingModalOpen}
-          onClose={() => setIsGradingModalOpen(false)}
-          title="Calificar Evidencia Pedagógica"
-          subtitle={`${selectedSubmissionForGrade.learnerName || 'Aprendiz'} · ${selectedSubmissionForGrade.activityTitle || selectedActivityForGrading?.title || 'Actividad Formativa'}`}
-          footer={
-            <>
-              <button
-                type="button"
-                onClick={() => setIsGradingModalOpen(false)}
-                className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveGradeModal}
-                disabled={isSavingGrade}
-                className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
-              >
-                {isSavingGrade && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                Guardar Dictamen
-              </button>
-            </>
-          }
-        >
-          <div className="space-y-4">
-            {/* Pestañas de Dictamen Oficial vs Rúbrica Pedagógica */}
-            {currentRubric && (
-              <div className="flex border-b border-slate-200 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveGradingTab('official')}
-                  className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
-                    activeGradingTab === 'official'
-                      ? 'border-[#39A900] text-[#00324D]'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Award className="w-3.5 h-3.5 text-[#39A900]" />
-                  <span>Dictamen Oficial A/N/C</span>
-                  <span className="text-[10px] bg-slate-100 text-slate-800 px-1.5 py-0.2 rounded font-black">
-                    {selectedGradeCode}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveGradingTab('rubric')}
-                  className={`pb-2 px-3 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
-                    activeGradingTab === 'rubric'
-                      ? 'border-[#39A900] text-[#00324D]'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Sliders className="w-3.5 h-3.5 text-[#39A900]" />
-                  <span>Rúbrica Pedagógica</span>
-                  {rubricResults ? (
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
-                      {rubricResults.percentage}%
-                    </span>
-                  ) : (
-                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded">
-                      Por evaluar
-                    </span>
-                  )}
-                </button>
-              </div>
-            )}
-
-            {/* Pestaña: Rúbrica Pedagógica */}
-            {activeGradingTab === 'rubric' && currentRubric ? (
-              <div className="space-y-4">
-                <RubricEvaluationForm
-                  rubric={currentRubric}
-                  initialResults={rubricResults?.criteriaResults}
-                  onResultsChange={(res) => {
-                    setRubricResults(res);
-                  }}
-                />
-
-                {/* Panel de Puntos, Porcentaje, Sugerencia y Dictamen Oficial */}
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4 shadow-2xs">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Puntaje Obtenido
-                      </span>
-                      <div className="flex items-baseline gap-1 text-slate-900">
-                        <span className="text-2xl font-black text-[#2E8500]">
-                          {rubricResults?.totalPoints || 0}
-                        </span>
-                        <span className="text-xs font-bold text-slate-500">
-                          / {rubricResults?.totalPossiblePoints || currentRubric.totalPoints} pts
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Porcentaje
-                      </span>
-                      <span className="text-2xl font-black text-[#00324D]">
-                        {rubricResults?.percentage || 0}%
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Sugerencia pedagógica orientativa */}
-                  <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs space-y-1">
-                    <div className="flex items-center gap-1.5 font-bold text-blue-950">
-                      <Info className="w-4 h-4 text-blue-600 shrink-0" />
-                      <span>Sugerencia pedagógica orientativa:</span>
-                    </div>
-                    <p className="text-[11px] text-blue-900 leading-relaxed">
-                      {rubricResults
-                        ? rubricResults.percentage >= 70
-                          ? 'Desempeño formativo acorde con los estándares esperados (Referencia orientativa: Cumple con los criterios de evaluación formativos).'
-                          : rubricResults.percentage >= 50
-                          ? 'Se identifican aspectos específicos por fortalecer (Referencia orientativa: Oportunidad de corrección o ajuste puntual).'
-                          : 'Criterios mínimos aún no alcanzados (Referencia orientativa: No cumple con los requerimientos esenciales).'
-                        : 'Califica los criterios en la rúbrica arriba para obtener una orientación formativa.'}
-                    </p>
-                    <p className="text-[10px] text-blue-800 italic pt-1 border-t border-blue-100">
-                      * Nota institucional: Esta sugerencia es meramente formativa. El instructor debe seleccionar explícitamente el Resultado Oficial SENA a continuación.
-                    </p>
-                  </div>
-
-                  {/* Selector Explícito de Dictamen Oficial SENA [ A ] [ N ] [ C ] */}
-                  <div className="space-y-2 pt-1 border-t border-slate-200">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-bold text-slate-800">
-                        Resultado Oficial SENA *
-                      </label>
-                      <span className="text-xs font-bold text-slate-600">
-                        Seleccionado:{' '}
-                        <strong
-                          className={
-                            selectedGradeCode === 'A'
-                              ? 'text-[#2E8500]'
-                              : selectedGradeCode === 'C'
-                              ? 'text-amber-700'
-                              : 'text-rose-600'
-                          }
-                        >
-                          {selectedGradeCode === 'A'
-                            ? 'A (Aprobado)'
-                            : selectedGradeCode === 'C'
-                            ? 'C (Por corregir)'
-                            : 'N (No aprobado)'}
-                        </strong>
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2.5">
-                      {/* [ A ] */}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedGradeCode('A')}
-                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                          selectedGradeCode === 'A'
-                            ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
-                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        <div className="text-xl font-black">A</div>
-                        <div className="text-xs font-bold">APROBADO</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
-                      </button>
-
-                      {/* [ N ] */}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedGradeCode('N')}
-                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                          selectedGradeCode === 'N'
-                            ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
-                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        <div className="text-xl font-black">N</div>
-                        <div className="text-xs font-bold">NO APROBADO</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
-                      </button>
-
-                      {/* [ C ] */}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedGradeCode('C')}
-                        className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                          selectedGradeCode === 'C'
-                            ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
-                            : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
-                        }`}
-                      >
-                        <div className="text-xl font-black">C</div>
-                        <div className="text-xs font-bold">CORREGIR</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Retroalimentación en la pestaña de rúbrica */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-800 mb-1">
-                      Retroalimentación General del Instructor {selectedGradeCode === 'C' && '*'}
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={feedbackInput}
-                      onChange={(e) => setFeedbackInput(e.target.value)}
-                      placeholder={
-                        selectedGradeCode === 'C'
-                          ? 'Indica con claridad qué aspectos debe corregir el aprendiz para su nueva entrega...'
-                          : 'Comentarios formativos adicionales para el aprendiz...'
-                      }
-                      className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#39A900] text-slate-800 bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* Pestaña: Dictamen Oficial A/N/C */}
-                {rubricResults && (
-                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-xs flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Sliders className="w-4 h-4 text-[#00324D]" />
-                      <span className="text-slate-800">
-                        Evaluación con Rúbrica: <strong>{rubricResults.percentage}%</strong> ({rubricResults.totalPoints}/{rubricResults.totalPossiblePoints} pts)
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActiveGradingTab('rubric')}
-                      className="text-[11px] font-bold text-sky-800 hover:underline cursor-pointer"
-                    >
-                      Ajustar criterios
-                    </button>
-                  </div>
-                )}
-
-                {/* Selector de Dictamen A / N / C */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-2">
-                    Dictamen Oficial SENA *
-                  </label>
-                  <div className="grid grid-cols-3 gap-2.5">
-                    {/* [ A ] */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedGradeCode('A')}
-                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                        selectedGradeCode === 'A'
-                          ? 'bg-emerald-50 border-[#39A900] text-[#2E8500] font-black shadow-sm ring-2 ring-[#39A900]/30'
-                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                      }`}
-                    >
-                      <div className="text-xl font-black">A</div>
-                      <div className="text-xs font-bold">APROBADO</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Cumple criterios</div>
-                    </button>
-
-                    {/* [ N ] */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedGradeCode('N')}
-                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                        selectedGradeCode === 'N'
-                          ? 'bg-rose-50 border-rose-500 text-rose-700 font-black shadow-sm ring-2 ring-rose-500/30'
-                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                      }`}
-                    >
-                      <div className="text-xl font-black">N</div>
-                      <div className="text-xs font-bold">NO APROBADO</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">No cumple criterios</div>
-                    </button>
-
-                    {/* [ C ] */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedGradeCode('C')}
-                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                        selectedGradeCode === 'C'
-                          ? 'bg-amber-50 border-amber-500 text-amber-800 font-black shadow-sm ring-2 ring-amber-500/30'
-                          : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                      }`}
-                    >
-                      <div className="text-xl font-black">C</div>
-                      <div className="text-xs font-bold">CORREGIR</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Habilita nuevo reenvío</div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Retroalimentación formativa */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-1">
-                    Retroalimentación del Instructor (Feedback) {selectedGradeCode === 'C' && '*'}
-                  </label>
-                  <textarea
-                    rows={4}
-                    value={feedbackInput}
-                    onChange={(e) => setFeedbackInput(e.target.value)}
-                    placeholder={
-                      selectedGradeCode === 'C'
-                        ? 'Indica con claridad qué aspectos debe corregir el aprendiz para que pueda reenviar la evidencia...'
-                        : 'Observaciones pedagógicas cualitativas para el aprendiz...'
-                    }
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white leading-relaxed"
-                  />
-                  <span className="text-[10.5px] text-slate-400 mt-1 block">
-                    Esta retroalimentación se guarda en Firestore y el aprendiz recibe notificación oficial automática.
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </Modal>
-      )}
-
-      {/* =========================================================================
-          PROMPT 33: MODAL 3 — INSPECCIÓN DE EVIDENCIA REAL (Google Drive)
-         ========================================================================= */}
-      {submissionToView && (
-        <Modal
-          isOpen={isViewEvidenceModalOpen}
-          onClose={() => setIsViewEvidenceModalOpen(false)}
-          title="Inspección de Evidencia Real"
-          subtitle={`${submissionToView.learnerName || 'Aprendiz'} · ${submissionToView.activityTitle || 'Actividad Formativa'}`}
-        >
-          <div className="space-y-4">
-            <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-xs space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
-                  Datos de la Entrega:
-                </span>
-                <span className="font-mono text-[10px] text-slate-400">ID: {submissionToView.id}</span>
-              </div>
-              <p className="font-bold text-slate-900">
-                Actividad: {submissionToView.activityTitle || 'Actividad Formativa'}
-              </p>
-              <p className="text-slate-600">
-                Aprendiz: <strong>{submissionToView.learnerName || submissionToView.learnerEmail || 'Aprendiz'}</strong>
-              </p>
-              <p className="text-slate-500">
-                Fecha de radicación:{' '}
-                <strong>{new Date(submissionToView.submittedAt).toLocaleString('es-CO')}</strong>
-              </p>
-            </div>
-
-            {/* Enlace y descarga a Google Drive */}
-            {submissionToView.driveFileId ? (
-              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
-                <div className="flex items-center gap-2">
-                  <HardDrive className="w-5 h-5 text-[#39A900]" />
-                  <div>
-                    <span className="text-xs font-bold text-emerald-950 block">
-                      Archivo Físico Alojado en Google Drive
-                    </span>
-                    <span className="text-[11px] text-emerald-700 font-mono">
-                      {submissionToView.fileName || 'evidencia'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <a
-                    href={
-                      submissionToView.driveUrl ||
-                      submissionToView.driveFileUrl ||
-                      `https://drive.google.com/file/d/${submissionToView.driveFileId}/view`
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-4 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Abrir en Google Drive
-                  </a>
-                </div>
-              </div>
-            ) : submissionToView.externalUrl ? (
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
-                <span className="text-xs font-bold text-blue-900 block">Enlace Externo Presentado:</span>
-                <a
-                  href={submissionToView.externalUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue-700 hover:underline break-all block font-semibold"
-                >
-                  {submissionToView.externalUrl}
-                </a>
-              </div>
-            ) : (
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 italic">
-                "{submissionToView.textContent}"
-              </div>
-            )}
-
-            {/* Retroalimentación actual registrada */}
-            {submissionToView.feedback && (
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
-                <span className="font-bold text-slate-700 block">Última Retroalimentación Registrada:</span>
-                <p className="italic text-slate-800">{submissionToView.feedback}</p>
-                <div className="text-[10px] text-slate-400 pt-1">
-                  Evaluado por: {submissionToView.gradedBy || 'Instructor'} el{' '}
-                  {submissionToView.gradedAt ? submissionToView.gradedAt.split('T')[0] : 'N/A'}
-                </div>
-              </div>
-            )}
-          </div>
-        </Modal>
-      )}
 
       {/* Toast flotante de confirmación */}
       {toastMessage && (

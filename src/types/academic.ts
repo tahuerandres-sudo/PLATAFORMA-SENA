@@ -292,6 +292,19 @@ export interface EvidenceActivity {
   rubricId?: string | null; // Asociación opcional con Rúbrica Pedagógica (Prompt 19)
   rubricTitle?: string;
 
+  // Exclusiones pedagógicas de aprendices para esta actividad (E - Excluir)
+  excludedLearnerIds?: string[];
+  exclusions?: Record<
+    string,
+    {
+      learnerId: string;
+      excludedAt: string;
+      excludedBy: string;
+      excludedByName?: string;
+      reason?: string;
+    }
+  >;
+
   // Validación de tipo de entrega de evidencia
   submissionType: EvidenceType;
   allowedMimeTypes?: string[];
@@ -317,7 +330,9 @@ export type SubmissionAcademicStatus =
   | 'not_approved'
   | 'correction_required'
   | 'late'
-  | 'blocked';
+  | 'blocked'
+  | 'exonerated'
+  | 'excluded';
 
 export interface AcademicSubmission {
   id: string;
@@ -341,6 +356,14 @@ export interface AcademicSubmission {
   fileName?: string;
   mimeType?: string;
   fileSize?: number; // Bytes
+
+  // Exclusión pedagógica de la evidencia (E - Excluir)
+  isExcluded?: boolean;
+  excludedAt?: string;
+  excludedBy?: string;
+  excludedByName?: string;
+  exclusionReason?: string;
+  previousGrade?: AcademicGradeCode;
 
   // Integración física con Google Drive
   driveFileId?: string; // ID único del archivo físico en Google Drive
@@ -430,7 +453,10 @@ export type AttendanceStatus =
   | 'PRESENTE'
   | 'AUSENTE'
   | 'TARDE'
-  | 'EXCUSADO';
+  | 'EXCUSADO'
+  | 'TARDE_EXCUSADO'
+  | 'late_excused'
+  | 'AUSENCIA_JUSTIFICADA';
 
 export interface AttendanceRecord {
   id: string;

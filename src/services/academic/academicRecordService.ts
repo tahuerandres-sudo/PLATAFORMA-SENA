@@ -439,14 +439,22 @@ export const academicRecordService = {
       const lateCount = attendances.filter(
         (a) => a.status === 'late' || (a.status as string) === 'TARDE'
       ).length;
+      const lateExcusedCount = attendances.filter(
+        (a) => a.status === 'late_excused' || (a.status as string) === 'TARDE_EXCUSADO'
+      ).length;
       const excusedCount = attendances.filter(
-        (a) => a.status === 'excused' || (a.status as string) === 'EXCUSADO'
+        (a) =>
+          a.status === 'excused' ||
+          (a.status as string) === 'EXCUSADO' ||
+          (a.status as string) === 'AUSENCIA_JUSTIFICADA'
       ).length;
 
+      // Regla: No contar ausencia justificada como asistencia efectiva.
+      // Quienes asistieron son: attendedSessions (Presentes), lateExcusedCount (Tardanza justificada) y lateCount (Tardanza).
       const attendanceRate =
         totalAttendanceSessions > 0
           ? Math.round(
-              ((attendedSessions + excusedCount + lateCount * 0.8) /
+              ((attendedSessions + lateExcusedCount + lateCount * 0.8) /
                 totalAttendanceSessions) *
                 100
             )

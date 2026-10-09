@@ -288,11 +288,50 @@ export const DEMO_FICHA_COURSES: FichaCourse[] = [
 // ==========================================
 export const DEMO_COMPETENCIES: Competency[] = [
   {
+    id: 'comp_ingles_01',
+    name: 'Comprender textos en inglés en forma escrita y auditiva',
+    code: '240201501',
+    description:
+      'Comprender textos en inglés en forma escrita y auditiva según las necesidades del contexto personal y técnico.',
+    type: 'transversal',
+    status: 'active',
+    courseId: 'course_ingles_laboral',
+    fichaId: 'ficha_3409626',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
     id: 'comp_ingles_laboral',
-    name: 'Competencia de inglés',
+    name: 'Interactuar en lengua inglesa de forma oral y escrita',
     code: '240202501',
     description:
       'Interactuar en lengua inglesa de forma oral y escrita dentro de contextos sociales y laborales según los criterios establecidos por el Marco Común Europeo de Referencia para las Lenguas.',
+    type: 'transversal',
+    status: 'active',
+    courseId: 'course_ingles_laboral',
+    fichaId: 'ficha_3409626',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'comp_ingles_03',
+    name: 'Producir textos en inglés en forma escrita y oral',
+    code: '240201502',
+    description:
+      'Producir textos en inglés en forma escrita y oral según los requerimientos del contexto laboral y social.',
+    type: 'transversal',
+    status: 'active',
+    courseId: 'course_ingles_laboral',
+    fichaId: 'ficha_3409626',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'comp_ingles_04',
+    name: 'Interactuar en contextos laborales y productivos en inglés',
+    code: '240202502',
+    description:
+      'Interactuar en lengua inglesa en contextos laborales y productivos según los criterios de fluidez y precisión del Marco Común Europeo de Referencia para las Lenguas.',
     type: 'transversal',
     status: 'active',
     courseId: 'course_ingles_laboral',
@@ -317,15 +356,103 @@ export const DEMO_COMPETENCIES: Competency[] = [
 
 // ==========================================
 // 7. RESULTADOS DE APRENDIZAJE (RAPs)
+// Organizados en las 4 Categorías Principales de Inglés SENA
 // ==========================================
 export const DEMO_LEARNING_OUTCOMES: LearningOutcome[] = [
+  // CATEGORÍA 1. Comprender textos en inglés en forma escrita y auditiva (240201501)
+  {
+    id: 'rap_ingles_cat1_01',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-01',
+    description:
+      'Realizar intercambios sociales y prácticos muy breves, con un vocabulario suficiente para hacer una exposición o mantener una conversación sencilla sobre temas técnicos.',
+    sequence: 1,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_02',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-02',
+    description:
+      'Comunicarse en tareas sencillas y habituales que requieren un intercambio simple y directo de información cotidiana y técnica.',
+    sequence: 2,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_03',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-03',
+    description:
+      'Comprender frases y vocabulario habitual sobre temas de interés personal y temas técnicos.',
+    sequence: 3,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_04',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-04',
+    description:
+      'Leer textos muy breves y sencillos en inglés general y técnico.',
+    sequence: 4,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_05',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-05',
+    description:
+      'Encontrar vocabulario y expresiones de inglés técnico en anuncios, folletos, páginas web, etc.',
+    sequence: 5,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_06',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-06',
+    description:
+      'Encontrar información específica y predecible en escritos sencillos y cotidianos.',
+    sequence: 6,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat1_07',
+    competencyId: 'comp_ingles_01',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201501-07',
+    description:
+      'Comprender la idea principal en avisos y mensajes breves, claros y sencillos en inglés técnico.',
+    sequence: 7,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+
+  // CATEGORÍA 2. Interactuar en lengua inglesa de forma oral y escrita (240202501)
   {
     id: 'rap_ingles_01',
     competencyId: 'comp_ingles_laboral',
     courseId: 'course_ingles_laboral',
     code: 'RAP-240202501-01',
     description:
-      'Comprender frases y vocabulario habitual sobre temas de interés personal y laboral cotidiano.',
+      'Comprender información sobre situaciones cotidianas y laborales actuales y futuras a través de interacciones sociales de forma oral y escrita.',
     sequence: 1,
     status: 'active',
     createdAt: '2026-01-01T00:00:00Z',
@@ -337,7 +464,7 @@ export const DEMO_LEARNING_OUTCOMES: LearningOutcome[] = [
     courseId: 'course_ingles_laboral',
     code: 'RAP-240202501-02',
     description:
-      'Comunicarse en tareas sencillas y habituales que requieren un intercambio simple y directo de información laboral.',
+      'Intercambiar opiniones sobre situaciones cotidianas y laborales actuales, pasadas y futuras en contextos sociales orales y escritos.',
     sequence: 2,
     status: 'active',
     createdAt: '2026-01-01T00:00:00Z',
@@ -349,8 +476,120 @@ export const DEMO_LEARNING_OUTCOMES: LearningOutcome[] = [
     courseId: 'course_ingles_laboral',
     code: 'RAP-240202501-03',
     description:
-      'Describir en términos sencillos aspectos de su entorno laboral, procesos comerciales y requerimientos del puesto de trabajo.',
+      'Discutir sobre posibles soluciones a problemas dentro de un rango de situaciones sociales y laborales.',
     sequence: 3,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat2_04',
+    competencyId: 'comp_ingles_laboral',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240202501-04',
+    description:
+      'Implementar acciones de mejora relacionadas con el uso de expresiones, estructuras y desempeño según el programa de formación.',
+    sequence: 4,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+
+  // CATEGORÍA 3. Producir textos en inglés en forma escrita y oral (240201502)
+  {
+    id: 'rap_ingles_cat3_01',
+    competencyId: 'comp_ingles_03',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201502-01',
+    description:
+      'Redactar textos breves y estructurados sobre temas de interés personal, profesional y técnico en inglés.',
+    sequence: 1,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat3_02',
+    competencyId: 'comp_ingles_03',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201502-02',
+    description:
+      'Describir procesos, entornos laborales y requerimientos del puesto de trabajo en lengua inglesa.',
+    sequence: 2,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat3_03',
+    competencyId: 'comp_ingles_03',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201502-03',
+    description:
+      'Elaborar resúmenes, informes sencillos y notas técnicas a partir de lecturas y audios especializados.',
+    sequence: 3,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat3_04',
+    competencyId: 'comp_ingles_03',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240201502-04',
+    description:
+      'Presentar oralmente informes o proyectos breves utilizando vocabulario técnico y estructuras acordes al nivel.',
+    sequence: 4,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+
+  // CATEGORÍA 4. Interactuar en contextos laborales y productivos en inglés (240202502)
+  {
+    id: 'rap_ingles_cat4_01',
+    competencyId: 'comp_ingles_04',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240202502-01',
+    description:
+      'Participar en conversaciones y reuniones de trabajo en lengua inglesa con fluidez y naturalidad adecuada.',
+    sequence: 1,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat4_02',
+    competencyId: 'comp_ingles_04',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240202502-02',
+    description:
+      'Comprender instrucciones y documentación técnica especializada de su ocupación o disciplina profesional.',
+    sequence: 2,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat4_03',
+    competencyId: 'comp_ingles_04',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240202502-03',
+    description:
+      'Argumentar y justificar puntos de vista en debates o negociaciones laborales en inglés.',
+    sequence: 3,
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'rap_ingles_cat4_04',
+    competencyId: 'comp_ingles_04',
+    courseId: 'course_ingles_laboral',
+    code: 'RAP-240202502-04',
+    description:
+      'Diseñar propuestas y proyectos técnicos en lengua inglesa respondiendo a necesidades del sector productivo.',
+    sequence: 4,
     status: 'active',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',

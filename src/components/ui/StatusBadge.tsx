@@ -64,6 +64,14 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       bgColor = 'bg-blue-50';
       defaultLabel = 'En revisión';
       break;
+    case 'excluido':
+    case 'exonerated':
+    case 'excluded':
+      dotColor = 'bg-purple-600';
+      textColor = 'text-purple-800';
+      bgColor = 'bg-purple-100';
+      defaultLabel = 'Excluido';
+      break;
     case 'publicada':
       dotColor = 'bg-emerald-500';
       textColor = 'text-emerald-800';

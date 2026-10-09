@@ -15,6 +15,12 @@ import {
   Search,
   Filter,
   Layers,
+  Edit3,
+  Trash2,
+  AlertTriangle,
+  ShieldAlert,
+  Info,
+  X,
 } from 'lucide-react';
 import { Competency, Course, TrainingProgram, Ficha } from '../../types/academic';
 import { competencyService } from '../../services/academic/competencyService';
@@ -42,7 +48,7 @@ export const InstructorCompetenciesView: React.FC = () => {
   const [selectedCourse, setSelectedCourse] = useState('all');
   const [selectedType, setSelectedType] = useState('all');
 
-  // Modal
+  // Modal: Crear
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -51,6 +57,40 @@ export const InstructorCompetenciesView: React.FC = () => {
   const [courseId, setCourseId] = useState('');
   const [programId, setProgramId] = useState('');
   const [fichaId, setFichaId] = useState('all');
+
+  // Modal: Editar
+  const [editingCompetency, setEditingCompetency] = useState<Competency | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editCode, setEditCode] = useState('');
+  const [editType, setEditType] = useState<'transversal' | 'technical' | 'basic'>('transversal');
+  const [editDescription, setEditDescription] = useState('');
+  const [editCourseId, setEditCourseId] = useState('');
+  const [editProgramId, setEditProgramId] = useState('');
+  const [editFichaId, setEditFichaId] = useState('all');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Modal: Eliminar con verificación de dependencias
+  const [competencyToDelete, setCompetencyToDelete] = useState<Competency | null>(null);
+  const [isCheckingDependencies, setIsCheckingDependencies] = useState(false);
+  const [dependenciesInfo, setDependenciesInfo] = useState<{
+    hasDependencies: boolean;
+    rapsCount: number;
+    activitiesCount: number;
+    resourcesCount: number;
+    raps: { id: string; name: string; code?: string }[];
+    activities: { id: string; title: string }[];
+    resources: { id: string; title: string }[];
+    details: string[];
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Mensaje Toast de retroalimentación
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => setToastMessage(null), 4000);
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -100,10 +140,10 @@ export const InstructorCompetenciesView: React.FC = () => {
 
     const newComp: Competency = {
       id: `comp_${Date.now()}`,
-      name,
-      code,
+      name: name.trim(),
+      code: code.trim(),
       type,
-      description,
+      description: description.trim(),
       courseId: courseId || (courses[0]?.id ?? 'course_ingles_laboral'),
       programId: programId || (programs[0]?.id ?? 'prog_gestion_contable'),
       fichaId: fichaId !== 'all' ? fichaId : undefined,
@@ -112,12 +152,120 @@ export const InstructorCompetenciesView: React.FC = () => {
       updatedAt: new Date().toISOString(),
     };
 
-    const saved = await competencyService.saveCompetency(newComp);
-    setCompetencies([saved, ...competencies]);
-    setIsModalOpen(false);
-    setName('');
-    setCode('');
-    setDescription('');
+    try {
+      const saved = await competencyService.saveCompetency(newComp);
+      setCompetencies([saved, ...competencies]);
+      setIsModalOpen(false);
+      setName('');
+      setCode('');
+      setDescription('');
+      showToast(`Competencia "${saved.code}" creada exitosamente.`);
+    } catch (err: any) {
+      showToast(err?.message || 'Error guardando competencia en Firestore.', 'error');
+    }
+  };
+
+  // 1. Abrir Modal de Edición con datos precargados
+  const handleOpenEdit = (comp: Competency) => {
+    setEditingCompetency(comp);
+    setEditName(comp.name || '');
+    setEditCode(comp.code || '');
+    setEditType((comp.type as any) || 'transversal');
+    setEditDescription(comp.description || '');
+    setEditCourseId(comp.courseId || (courses[0]?.id ?? ''));
+    setEditProgramId(comp.programId || (programs[0]?.id ?? ''));
+    setEditFichaId(comp.fichaId || 'all');
+  };
+
+  // Guardar Cambios de Edición en Firestore
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCompetency || !editName.trim() || !editCode.trim()) return;
+
+    setIsSavingEdit(true);
+    try {
+      const updated = await competencyService.updateCompetency(editingCompetency.id, {
+        name: editName.trim(),
+        code: editCode.trim(),
+        type: editType,
+        description: editDescription.trim(),
+        courseId: editCourseId || editingCompetency.courseId || undefined,
+        programId: editProgramId || editingCompetency.programId || undefined,
+        fichaId: editFichaId !== 'all' ? editFichaId : undefined,
+      });
+
+      // Actualizar inmediatamente la tarjeta en pantalla
+      setCompetencies((prev) =>
+        prev.map((c) => (c.id === updated.id ? updated : c))
+      );
+
+      showToast(`Competencia "${updated.code}" actualizada exitosamente.`);
+      setEditingCompetency(null);
+    } catch (err: any) {
+      console.error('[InstructorCompetenciesView] Error al actualizar competencia:', err);
+      showToast(err?.message || 'Error al actualizar la competencia en Firestore.', 'error');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  // 2. Abrir Modal de Eliminación y Verificar Dependencias Curriculares
+  const handleOpenDelete = async (comp: Competency) => {
+    setCompetencyToDelete(comp);
+    setDependenciesInfo(null);
+    setIsCheckingDependencies(true);
+
+    try {
+      const depInfo = await competencyService.checkCompetencyDependencies(comp.id);
+      // Sincronizar también con el conteo de RAPs cargados localmente
+      const localRaps = rapCounts[comp.id] || 0;
+      if (localRaps > 0 && depInfo.rapsCount === 0) {
+        depInfo.rapsCount = localRaps;
+        depInfo.hasDependencies = true;
+        depInfo.details.push(`${localRaps} Resultado(s) de Aprendizaje (RAP) asociados.`);
+      }
+      setDependenciesInfo(depInfo);
+    } catch (err) {
+      console.warn('[InstructorCompetenciesView] Error verificando dependencias:', err);
+      const localRaps = rapCounts[comp.id] || 0;
+      setDependenciesInfo({
+        hasDependencies: localRaps > 0,
+        rapsCount: localRaps,
+        activitiesCount: 0,
+        resourcesCount: 0,
+        raps: [],
+        activities: [],
+        resources: [],
+        details: localRaps > 0 ? [`${localRaps} Resultado(s) de Aprendizaje (RAP) asociados.`] : [],
+      });
+    } finally {
+      setIsCheckingDependencies(false);
+    }
+  };
+
+  // Confirmar Eliminación Segura
+  const handleConfirmDelete = async () => {
+    if (!competencyToDelete) return;
+    if (dependenciesInfo?.hasDependencies) {
+      showToast('No es posible eliminar una competencia con dependencias académicas.', 'error');
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await competencyService.deleteCompetency(competencyToDelete.id);
+
+      // Actualizar inmediatamente la lista de competencias
+      setCompetencies((prev) => prev.filter((c) => c.id !== competencyToDelete.id));
+
+      showToast(`Competencia "${competencyToDelete.code}" eliminada exitosamente.`);
+      setCompetencyToDelete(null);
+    } catch (err: any) {
+      console.error('[InstructorCompetenciesView] Error al eliminar competencia:', err);
+      showToast(err?.message || 'Error al eliminar la competencia en Firestore.', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const filteredCompetencies = competencies.filter((comp) => {
@@ -287,6 +435,29 @@ export const InstructorCompetenciesView: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Acciones de Competencia: Editar y Eliminar (Visibles en todas las tarjetas de competencias) */}
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEdit(comp)}
+                    className="px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-[#00324D] bg-slate-100 hover:bg-slate-200/80 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title={`Editar competencia ${comp.code}`}
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Editar</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDelete(comp)}
+                    className="px-3 py-1.5 text-xs font-semibold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title={`Eliminar competencia ${comp.code}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Eliminar competencia</span>
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -410,6 +581,303 @@ export const InstructorCompetenciesView: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* 2. Modal: Editar Competencia Existente */}
+      <Modal
+        isOpen={Boolean(editingCompetency)}
+        onClose={() => setEditingCompetency(null)}
+        title="Editar Competencia Laboral"
+        subtitle={
+          editingCompetency
+            ? `Modificar datos de la competencia ${editingCompetency.code} en /competencies`
+            : ''
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={isSavingEdit}
+              onClick={() => setEditingCompetency(null)}
+              className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={isSavingEdit}
+              onClick={handleSaveEdit}
+              className="px-4 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+            >
+              {isSavingEdit ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Guardando...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Guardar Cambios</span>
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        {editingCompetency && (
+          <form onSubmit={handleSaveEdit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Nombre de la Competencia *
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="Nombre o redacción de la competencia..."
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Código Norma Laboral *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: 240202501"
+                  value={editCode}
+                  onChange={(e) => setEditCode(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] font-mono font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Tipo *
+                </label>
+                <select
+                  value={editType}
+                  onChange={(e) => setEditType(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                >
+                  <option value="transversal">Transversal (Bilingüismo / Ética)</option>
+                  <option value="technical">Técnica Específica</option>
+                  <option value="basic">Básica Institucional</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Programa de Formación
+              </label>
+              <select
+                value={editProgramId}
+                onChange={(e) => setEditProgramId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="">(Sin vincular a programa específico)</option>
+                {programs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Curso Vinculado
+              </label>
+              <select
+                value={editCourseId}
+                onChange={(e) => setEditCourseId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="">(Sin vincular a curso específico)</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Ficha Específica (Opcional)
+              </label>
+              <select
+                value={editFichaId}
+                onChange={(e) => setEditFichaId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="all">Catálogo general (Aplica a todas las fichas)</option>
+                {fichas.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    Ficha #{f.number} - {f.name || f.programName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Descripción Oficial y Criterios
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Criterios de desempeño, alcance y contexto formativo..."
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              />
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* 3. Modal: Confirmar Eliminación con Validación de Dependencias Curriculares */}
+      <Modal
+        isOpen={Boolean(competencyToDelete)}
+        onClose={() => setCompetencyToDelete(null)}
+        title="Eliminar Competencia de Formación"
+        subtitle={
+          competencyToDelete
+            ? `${competencyToDelete.name} (Código: ${competencyToDelete.code})`
+            : ''
+        }
+        maxWidth="md"
+        footer={
+          <div className="flex items-center justify-between w-full">
+            <button
+              type="button"
+              disabled={isDeleting}
+              onClick={() => setCompetencyToDelete(null)}
+              className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
+            >
+              {dependenciesInfo?.hasDependencies ? 'Cerrar / Entendido' : 'Cancelar'}
+            </button>
+
+            {!dependenciesInfo?.hasDependencies && !isCheckingDependencies && (
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Eliminando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Sí, Eliminar Competencia</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        }
+      >
+        {competencyToDelete && (
+          <div className="space-y-4 pt-1">
+            {isCheckingDependencies ? (
+              <div className="py-8 text-center space-y-2">
+                <RefreshCw className="w-6 h-6 animate-spin text-[#39A900] mx-auto" />
+                <p className="text-xs font-semibold text-slate-600">
+                  Verificando relaciones curriculares en Firestore (RAPs, actividades, recursos)...
+                </p>
+              </div>
+            ) : dependenciesInfo?.hasDependencies ? (
+              /* CASO 1: TIENE DEPENDENCIAS -> NO PERMITIR ELIMINACIÓN */
+              <div className="space-y-3">
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-xs text-amber-900">
+                    <h4 className="font-bold text-amber-950">
+                      No es posible eliminar esta competencia
+                    </h4>
+                    <p className="text-[11px] leading-relaxed">
+                      La competencia seleccionada tiene relaciones curriculares activas asociadas. Eliminarla dejaría información académica huérfana en el sistema formativo.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                  <h5 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <ShieldAlert className="w-4 h-4 text-rose-500" />
+                    <span>Dependencias detectadas ({dependenciesInfo.rapsCount + dependenciesInfo.activitiesCount + dependenciesInfo.resourcesCount}):</span>
+                  </h5>
+                  <ul className="text-xs space-y-1.5 pl-2">
+                    {dependenciesInfo.details.map((detail, idx) => (
+                      <li key={idx} className="flex items-start gap-1.5 text-slate-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
+                        <span>{detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-[11px] text-blue-800 space-y-1">
+                  <p className="font-bold flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5 text-blue-600" />
+                    ¿Cómo resolver las dependencias?
+                  </p>
+                  <p>
+                    Para proteger los registros de evidencias y calificaciones de los aprendices, debes reasignar o desvincular los Resultados de Aprendizaje (RAP) y actividades hacia otra competencia antes de intentar eliminarla.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              /* CASO 2: NO TIENE DEPENDENCIAS -> CONFIRMACIÓN SEGURA */
+              <div className="space-y-3 text-xs text-slate-600">
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2.5 text-emerald-900">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <h5 className="font-bold text-xs">Sin dependencias académicas</h5>
+                    <p className="text-[11px] text-emerald-800 mt-0.5">
+                      Esta competencia no tiene Resultados de Aprendizaje (RAP), actividades ni recursos vinculados. Es seguro proceder con su retiro.
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-xs leading-relaxed">
+                  ¿Estás seguro de que deseas eliminar permanentemente la competencia laboral{' '}
+                  <strong className="text-slate-900 font-bold">"{competencyToDelete.name}"</strong> (Código: <span className="font-mono font-bold">{competencyToDelete.code}</span>)?
+                </p>
+
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px]">
+                  ⚠️ Esta acción eliminará el documento de la colección <code className="font-mono">/competencies</code> en Cloud Firestore de manera irreversible.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* 4. Notificación Toast */}
+      {toastMessage && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-semibold animate-in slide-in-from-bottom-2 duration-200 ${
+            toastMessage.type === 'success'
+              ? 'bg-[#00324D] text-white border-[#39A900]'
+              : 'bg-rose-900 text-white border-rose-500'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-[#8CE665] shrink-0" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-rose-300 shrink-0" />
+          )}
+          <span>{toastMessage.text}</span>
+        </div>
+      )}
     </div>
   );
 };

@@ -19,6 +19,8 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
+  writeBatch,
   query,
   where,
 } from 'firebase/firestore';
@@ -116,6 +118,12 @@ export const trackingService = {
       }
 
       // Mezclar Firestore con cambios locales en memoria para reactividad
+      fromDb.forEach((r) => {
+        const idx = inMemoryAttendance.findIndex((m) => m.id === r.id);
+        if (idx >= 0) inMemoryAttendance[idx] = r;
+        else inMemoryAttendance.push(r);
+      });
+
       const mergedMap = new Map<string, AttendanceRecord>();
       inMemoryAttendance.forEach((r) => mergedMap.set(r.id, r));
       fromDb.forEach((r) => mergedMap.set(r.id, r));
@@ -147,6 +155,7 @@ export const trackingService = {
    * - Si el instructor pasa customAttentionCall explícito, crea el llamado correspondiente
    */
   async recordAttendance(payload: {
+    id?: string;
     learnerId: string;
     userId?: string;
     learnerName?: string;
@@ -165,17 +174,33 @@ export const trackingService = {
     notes?: string;
     customAttentionCall?: Partial<AttentionCall>;
     skipAutomaticCall?: boolean;
+    createdAt?: string;
+    recordedBy?: string;
   }): Promise<{
     attendance: AttendanceRecord;
     attentionCall?: AttentionCall;
   }> {
     const now = new Date().toISOString();
     const effectiveUserId = payload.userId || payload.learnerId;
-    const recordId = `att_${payload.fichaId}_${effectiveUserId}_${payload.date}`;
+    const defaultRecordId = payload.id || `att_${payload.fichaId}_${effectiveUserId}_${payload.date}`;
 
-    // Buscar si ya existe el registro en memoria
-    const existingIndex = inMemoryAttendance.findIndex((a) => a.id === recordId);
+    // Buscar si ya existe el registro en memoria o por identificadores clave
+    let existingIndex = inMemoryAttendance.findIndex(
+      (a) => a.id === defaultRecordId || (payload.id && a.id === payload.id)
+    );
+    if (existingIndex < 0) {
+      existingIndex = inMemoryAttendance.findIndex(
+        (a) =>
+          a.fichaId === payload.fichaId &&
+          (a.userId === effectiveUserId || a.learnerId === effectiveUserId) &&
+          a.date === payload.date
+      );
+    }
     const existingRecord = existingIndex >= 0 ? inMemoryAttendance[existingIndex] : null;
+    const recordId = existingRecord?.id || defaultRecordId;
+
+    const initialCreatedAt = payload.createdAt || existingRecord?.createdAt || now;
+    const initialRecordedBy = payload.recordedBy || existingRecord?.recordedBy || payload.instructorId;
 
     const record: AttendanceRecord = {
       id: recordId,
@@ -194,24 +219,26 @@ export const trackingService = {
       minutesLate: payload.minutesLate !== undefined ? payload.minutesLate : existingRecord?.minutesLate,
       observation: payload.observation !== undefined ? payload.observation : (payload.notes || existingRecord?.observation),
       notes: payload.observation !== undefined ? payload.observation : (payload.notes || existingRecord?.notes),
-      recordedBy: existingRecord?.recordedBy || payload.instructorId,
+      recordedBy: initialRecordedBy,
       recordedAt: existingRecord?.recordedAt || now,
-      createdAt: existingRecord?.createdAt || now,
+      createdAt: initialCreatedAt,
       updatedAt: now,
     };
 
-    // Actualizar cache en memoria
+    // Persistir en Cloud Firestore (/attendance/{recordId})
+    // Esperar confirmación de Firestore sin tragar excepciones para garantizar integridad
+    try {
+      await setDoc(doc(db, FIRESTORE_COLLECTIONS.ATTENDANCE, recordId), cleanUndefined(record), { merge: true });
+    } catch (err: any) {
+      console.error('[trackingService] Error crítico guardando asistencia en Firestore:', err);
+      throw new Error(`Error en Firestore (${err?.code || 'desconocido'}): ${err?.message || 'Permiso o red no disponible'}`);
+    }
+
+    // Actualizar cache en memoria solo tras confirmación exitosa de Firestore
     if (existingIndex >= 0) {
       inMemoryAttendance[existingIndex] = record;
     } else {
       inMemoryAttendance.push(record);
-    }
-
-    // Persistir en Cloud Firestore (/attendance/{recordId})
-    try {
-      await setDoc(doc(db, FIRESTORE_COLLECTIONS.ATTENDANCE, recordId), cleanUndefined(record), { merge: true });
-    } catch (err) {
-      console.warn('[trackingService] Aviso guardando asistencia en Firestore:', err);
     }
 
     // PROMPT 14 - Evento Gamificación E: Asistencia puntual (+5 XP)
@@ -319,6 +346,81 @@ export const trackingService = {
     }
 
     return { attendance: record, attentionCall: createdCall };
+  },
+
+  /**
+   * Elimina un registro puntual de asistencia por ID de la base de datos y memoria
+   */
+  async deleteAttendanceRecord(recordId: string): Promise<boolean> {
+    try {
+      // Eliminar de Cloud Firestore
+      await deleteDoc(doc(db, FIRESTORE_COLLECTIONS.ATTENDANCE, recordId));
+
+      // Eliminar de memoria tras confirmación de Firestore
+      const idx = inMemoryAttendance.findIndex((a) => a.id === recordId);
+      if (idx >= 0) {
+        inMemoryAttendance.splice(idx, 1);
+      }
+      return true;
+    } catch (err: any) {
+      console.error('[trackingService] Error eliminando registro de asistencia:', err);
+      throw new Error(`Error eliminando de Firestore (${err?.code || 'desconocido'}): ${err?.message || 'Permiso o red no disponible'}`);
+    }
+  },
+
+  /**
+   * Elimina todos los registros de una sesión (fecha) para una ficha específica
+   */
+  async deleteAttendanceSession(fichaId: string, date: string): Promise<boolean> {
+    try {
+      // Eliminar de memoria
+      for (let i = inMemoryAttendance.length - 1; i >= 0; i--) {
+        if (inMemoryAttendance[i].fichaId === fichaId && inMemoryAttendance[i].date === date) {
+          inMemoryAttendance.splice(i, 1);
+        }
+      }
+
+      // Buscar registros en Firestore para esa ficha y fecha
+      const q = query(
+        collection(db, FIRESTORE_COLLECTIONS.ATTENDANCE),
+        where('fichaId', '==', fichaId),
+        where('date', '==', date)
+      );
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      return true;
+    } catch (err) {
+      console.warn('[trackingService] Error eliminando sesión de asistencia:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Guarda de forma masiva registros de asistencia de una sesión
+   */
+  async batchRecordAttendance(
+    payloads: Array<{
+      learnerId: string;
+      userId?: string;
+      learnerName?: string;
+      learnerDocument?: string;
+      enrollmentId?: string;
+      fichaId: string;
+      programId?: string;
+      courseId?: string;
+      instructorId: string;
+      date: string;
+      status: AttendanceStatus;
+      arrivalTime?: string;
+      minutesLate?: number;
+      observation?: string;
+      notes?: string;
+    }>
+  ): Promise<void> {
+    const promises = payloads.map((payload) => this.recordAttendance(payload));
+    await Promise.all(promises);
   },
 
   // ==========================================
@@ -920,14 +1022,22 @@ export const trackingService = {
     const lateCount = userAttendances.filter(
       (a) => a.status === 'late' || a.status === 'TARDE'
     ).length;
+    const lateExcusedCount = userAttendances.filter(
+      (a) => a.status === 'late_excused' || a.status === 'TARDE_EXCUSADO'
+    ).length;
     const excusedCount = userAttendances.filter(
-      (a) => a.status === 'excused' || a.status === 'EXCUSADO'
+      (a) =>
+        a.status === 'excused' ||
+        a.status === 'EXCUSADO' ||
+        a.status === 'AUSENCIA_JUSTIFICADA'
     ).length;
 
+    // Regla: No contar ausencia justificada como asistencia efectiva.
+    // Asistieron efectivamente los presentes (100%), tardanzas con excusa (100%) y tardanzas (80%).
     const attendanceRate =
       totalSessions > 0
-        ? Math.round(((presentCount + excusedCount + lateCount * 0.8) / totalSessions) * 100)
-        : 90;
+        ? Math.round(((presentCount + lateExcusedCount + lateCount * 0.8) / totalSessions) * 100)
+        : 100;
 
     const activeRestrictions = restrRes.data.filter(
       (r) => r.status === 'active' || r.status === 'ACTIVA'
@@ -940,6 +1050,7 @@ export const trackingService = {
       presentCount,
       absentCount,
       lateCount,
+      lateExcusedCount,
       excusedCount,
       attendanceRate,
       attendances: userAttendances,

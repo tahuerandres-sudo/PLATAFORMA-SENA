@@ -137,14 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'competencies', label: 'Competencias', icon: Target },
     { id: 'learning_outcomes', label: 'Resultados de aprendizaje', icon: ListOrdered },
     { id: 'calendar', label: 'Calendario Académico', icon: Calendar },
-    {
-      id: 'submissions',
-      label: 'Evidencias',
-      icon: FolderArchive,
-      badge: formatBadge(instructorMetrics?.submissionsCount),
-    },
     { id: 'grades', label: 'Calificaciones', icon: Award },
-    { id: 'attendance', label: 'Asistencia', icon: CalendarCheck },
     { id: 'tracking', label: 'Seguimiento', icon: ClipboardList },
     {
       id: 'attention_calls',
