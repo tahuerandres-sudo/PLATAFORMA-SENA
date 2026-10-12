@@ -297,10 +297,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [newAnnouncementMessage, setNewAnnouncementMessage] = useState('');
   const [isPublishingAnnouncement, setIsPublishingAnnouncement] = useState(false);
 
-  // 7. Formulario Crear Ficha (Estructura Curricular SENA: Programa → Ficha → Competencia)
+  // 7. Formulario Crear Ficha (Estructura Curricular SENA: Ficha → Competencia asociada)
   const [newFichaName, setNewFichaName] = useState('');
   const [newFichaNumber, setNewFichaNumber] = useState('');
-  const [newProgramId, setNewProgramId] = useState('');
   const [newCompetencyId, setNewCompetencyId] = useState('');
   const [newCenterId, setNewCenterId] = useState('');
   const [newShift, setNewShift] = useState<FichaShift>('morning');
@@ -351,16 +350,10 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [isRemovingLearner, setIsRemovingLearner] = useState(false);
   const [removeLearnerError, setRemoveLearnerError] = useState<string | null>(null);
 
-  // Competencias disponibles para el programa de formación seleccionado en Nueva Ficha
+  // Competencias disponibles para Nueva Ficha (Catálogo completo de /competencies sin restricción de programa)
   const availableCompetenciesForNewFicha = useMemo(() => {
-    if (!newProgramId) return allCompetencies;
-    return allCompetencies.filter((c) => {
-      if (c.programId) {
-        return c.programId === newProgramId;
-      }
-      return true; // Transversal o sin restricción exclusiva de programa
-    });
-  }, [allCompetencies, newProgramId]);
+    return allCompetencies;
+  }, [allCompetencies]);
 
   // Selección reactiva de competencia para nueva ficha
   useEffect(() => {
@@ -400,10 +393,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       setPrograms(loadedProgs);
       setCenters(loadedCenters);
       setAllCompetencies(loadedComps);
-
-      if (loadedProgs.length > 0) {
-        setNewProgramId((prev) => prev || loadedProgs[0].id);
-      }
 
       if (loadedCenters.length > 0) {
         setNewCenterId((prev) => prev || loadedCenters[0].id);
@@ -753,26 +742,23 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       const now = new Date().toISOString();
       const fichaId = `ficha_${rawNumber}`;
 
-      // Asignar Programa seleccionado
-      const selectedProg = programs.find((p) => p.id === newProgramId) || programs[0] || null;
-      const programId = selectedProg?.id || 'prog_gestion_academica';
-      const programName = selectedProg?.name || rawName;
-
       const realInstructorUid = auth.currentUser?.uid || instructorUid;
       if (!realInstructorUid) {
         setFichaFormError('No se detectó una sesión de instructor activa. Por favor recarga e inicia sesión.');
         return;
       }
 
+      // PROMPT 45: No generar un programId ficticio ni asignar un programa incorrecto.
+      // El nombre descriptivo es el dato principal que identifica la ficha.
       const newFicha: Ficha = {
         id: fichaId,
         number: rawNumber,
         name: rawName,
         description: newDescription.trim() || `Ficha ${rawNumber} - ${rawName}`,
-        programId,
-        programName,
+        programId: undefined,
+        programName: rawName,
         competencyId: selectedComp.id,
-        competencyCode: selectedComp.code,
+        competencyCode: undefined,
         competencyName: selectedComp.name,
         centerId: newCenterId || centers[0]?.id || 'center_comercio_servicios',
         instructorIds: [realInstructorUid],
@@ -879,7 +865,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         centerId: selectedCenter?.id || editCenterId || targetFicha.centerId,
         centerName: selectedCenter?.name || targetFicha.centerName,
         competencyId: selectedComp?.id || (editCompetencyId ? editCompetencyId : ''),
-        competencyCode: selectedComp?.code || (editCompetencyId ? targetFicha.competencyCode : ''),
+        competencyCode: undefined,
         competencyName: selectedComp?.name || (editCompetencyId ? targetFicha.competencyName : ''),
         shift: editShift,
         stage: editStage,
@@ -2239,9 +2225,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 </div>
                 {activeFicha.competencyId ? (
                   <span className="bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/20 font-medium inline-flex items-center gap-1.5">
-                    <strong className="font-mono text-[#8CE665] font-bold">
-                      [{activeFicha.competencyCode || allCompetencies.find(c => c.id === activeFicha.competencyId)?.code || 'Norma'}]
-                    </strong>
                     <span>
                       {activeFicha.competencyName || allCompetencies.find(c => c.id === activeFicha.competencyId)?.name || 'Competencia vinculada'}
                     </span>
@@ -5867,7 +5850,6 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     <div className="pt-1.5 flex items-center gap-1.5 text-[11px] text-[#8CE665] truncate font-medium border-t border-white/10 mt-1.5">
                       <Award className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">
-                        {ficha.competencyCode ? `[${ficha.competencyCode}] ` : ''}
                         {ficha.competencyName || (ficha.competencyId ? 'Competencia asignada' : 'Sin competencia')}
                       </span>
                     </div>
@@ -5975,7 +5957,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       )}
 
       {/* =========================================================================
-          MODAL: CREAR NUEVA FICHA (Estructura Curricular SENA: Programa → Ficha → Competencia)
+          MODAL: CREAR NUEVA FICHA (PROMPT 45: Identificación por Nombre Descriptivo)
          ========================================================================= */}
       <Modal
         isOpen={isCreateFichaModalOpen}
@@ -5984,7 +5966,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       >
         <form onSubmit={handleCreateFichaSubmit} className="space-y-4">
           <p className="text-xs text-slate-500">
-            La ficha representa un grupo o clase de aprendices. Cada ficha está vinculada a un programa y a una competencia formativa.
+            La ficha representa un grupo o clase de aprendices, identificada principalmente por su nombre descriptivo y competencia formativa.
           </p>
 
           {fichaFormError && (
@@ -5994,63 +5976,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             </div>
           )}
 
-          {/* 1. Programa de Formación */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Programa de Formación *
-            </label>
-            <select
-              required
-              value={newProgramId}
-              onChange={(e) => {
-                setNewProgramId(e.target.value);
-              }}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
-            >
-              {programs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.code}) · {p.level.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 2. Competencia Asociada * */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <Award className="w-3.5 h-3.5 text-[#39A900]" />
-                <span>Competencia asociada *</span>
-              </span>
-              <span className="text-[10px] text-slate-500 font-normal">
-                {availableCompetenciesForNewFicha.length} disponibles
-              </span>
-            </label>
-            {availableCompetenciesForNewFicha.length === 0 ? (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
-                No hay competencias disponibles para el programa de formación seleccionado en la colección /competencies.
-              </div>
-            ) : (
-              <select
-                required
-                value={newCompetencyId}
-                onChange={(e) => setNewCompetencyId(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
-              >
-                <option value="">-- Selecciona la competencia asociada a la ficha --</option>
-                {availableCompetenciesForNewFicha.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
-                  </option>
-                ))}
-              </select>
-            )}
-            <p className="text-[10px] text-slate-500 mt-1">
-              Estructura curricular SENA: Las actividades que se creen en esta ficha evaluarán exclusivamente los RAPs de esta competencia.
-            </p>
-          </div>
-
-          {/* 3. Nombre descriptivo */}
+          {/* 1. Nombre descriptivo (Identificador principal de la ficha) */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Nombre descriptivo de la ficha / clase *
@@ -6063,8 +5989,12 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               placeholder="Ej: Inglés – Mesa y Bar, Gestión Contable Nocturna..."
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
             />
+            <p className="text-[10px] text-slate-400 mt-1">
+              Nombre visible que identificará la ficha en el panel y en las listas de clase.
+            </p>
           </div>
 
+          {/* 2. Número de Ficha y Jornada Formativa */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -6096,6 +6026,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             </div>
           </div>
 
+          {/* 3. Centro de Formación */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Centro de Formación *
@@ -6111,6 +6042,41 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* 4. Competencia Asociada */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                <span>Competencia asociada *</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-normal">
+                {availableCompetenciesForNewFicha.length} disponibles
+              </span>
+            </label>
+            {availableCompetenciesForNewFicha.length === 0 ? (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                No hay competencias registradas en el catálogo de /competencies.
+              </div>
+            ) : (
+              <select
+                required
+                value={newCompetencyId}
+                onChange={(e) => setNewCompetencyId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
+              >
+                <option value="">-- Selecciona la competencia asociada a la ficha --</option>
+                {availableCompetenciesForNewFicha.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="text-[10px] text-slate-500 mt-1">
+              Estructura curricular SENA: Las actividades que se creen en esta ficha evaluarán los RAPs de esta competencia.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -6317,7 +6283,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 <option value="">-- Sin competencia asociada (o seleccionar después) --</option>
                 {availableCompetenciesForEditFicha.map((c) => (
                   <option key={c.id} value={c.id}>
-                    [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
+                    {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
                   </option>
                 ))}
               </select>

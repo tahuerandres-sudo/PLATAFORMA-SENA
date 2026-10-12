@@ -620,8 +620,7 @@ export const InstructorReportsView: React.FC = () => {
       if (competencyPerformanceReport.length === 0) return;
       const headers = [
         'Ficha',
-        'Código Competencia',
-        'Descripción Competencia',
+        'Competencia',
         'Actividades Requeridas',
         'Entregas Recibidas',
         'Aprobadas (A)',
@@ -632,7 +631,6 @@ export const InstructorReportsView: React.FC = () => {
       ];
       const rows = competencyPerformanceReport.map((r) => [
         `"Ficha ${r.fichaNumber}"`,
-        `"${r.competencyCode}"`,
         `"${r.competencyName.replace(/"/g, '""')}"`,
         r.totalRequiredActivities,
         r.totalSubmissions,
@@ -899,7 +897,7 @@ export const InstructorReportsView: React.FC = () => {
               <option value="all">Todas las competencias</option>
               {competencies.map((comp) => (
                 <option key={comp.id} value={comp.id}>
-                  {comp.code} - {comp.description.slice(0, 35)}...
+                  {comp.name || comp.description?.slice(0, 45) || 'Competencia'}
                 </option>
               ))}
             </select>
@@ -1185,7 +1183,6 @@ export const InstructorReportsView: React.FC = () => {
                 <thead>
                   <tr className="bg-[#00324D] text-white">
                     <th className="p-3 font-bold">Ficha</th>
-                    <th className="p-3 font-bold">Código</th>
                     <th className="p-3 font-bold">Competencia</th>
                     <th className="p-3 font-bold text-center">Actividades</th>
                     <th className="p-3 font-bold text-center">Entregas</th>
@@ -1200,9 +1197,6 @@ export const InstructorReportsView: React.FC = () => {
                     <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                       <td className="p-3 font-mono font-bold text-slate-900">
                         #{row.fichaNumber}
-                      </td>
-                      <td className="p-3 font-mono text-[11px] text-slate-600">
-                        {row.competencyCode}
                       </td>
                       <td className="p-3 max-w-sm font-medium text-slate-800">
                         {row.competencyName}

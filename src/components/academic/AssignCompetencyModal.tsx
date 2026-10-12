@@ -61,10 +61,9 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
       // Filtro por término de búsqueda
       if (searchTerm.trim()) {
         const term = searchTerm.toLowerCase().trim();
-        const matchesCode = c.code.toLowerCase().includes(term);
         const matchesName = c.name.toLowerCase().includes(term);
         const matchesDesc = c.description ? c.description.toLowerCase().includes(term) : false;
-        return matchesCode || matchesName || matchesDesc;
+        return matchesName || matchesDesc;
       }
 
       return true;
@@ -97,14 +96,14 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
       const updatedFicha: Ficha = {
         ...ficha,
         competencyId: chosen.id,
-        competencyCode: chosen.code,
+        competencyCode: undefined,
         competencyName: chosen.name,
         updatedAt: new Date().toISOString(),
       };
 
       const saved = await fichaService.saveFicha(updatedFicha);
 
-      showToast(`Competencia [${chosen.code}] asignada exitosamente a la Ficha #${ficha.number}`);
+      showToast(`Competencia "${chosen.name}" asignada exitosamente a la Ficha #${ficha.number}`);
       onCompetencyAssigned(saved);
       onClose();
     } catch (err: any) {
@@ -149,7 +148,7 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
-              placeholder="Buscar por código (ej: 240201501) o nombre..."
+              placeholder="Buscar por nombre o descripción..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white"
@@ -175,7 +174,7 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
             {selectedCompetency && (
               <span className="text-[11px] text-[#2E8500] font-bold inline-flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" />
-                Seleccionada: [{selectedCompetency.code}]
+                Seleccionada: {selectedCompetency.name}
               </span>
             )}
           </label>
@@ -202,9 +201,6 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
                   >
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs font-black text-[#00324D] bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                          {comp.code}
-                        </span>
                         <span
                           className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
                             comp.type === 'transversal'
@@ -255,7 +251,7 @@ export const AssignCompetencyModal: React.FC<AssignCompetencyModalProps> = ({
             <div className="flex items-center gap-2">
               <Award className="w-4 h-4 text-[#39A900] shrink-0" />
               <div className="text-xs text-[#00324D] font-bold">
-                [{selectedCompetency.code}] {selectedCompetency.name}
+                {selectedCompetency.name}
               </div>
             </div>
           </div>

@@ -557,9 +557,6 @@ export const InstructorLearningOutcomesView: React.FC = () => {
                         >
                           {category.badgeLabel}
                         </span>
-                        <span className="text-[11px] font-bold bg-white/90 text-slate-700 px-2 py-0.5 rounded border border-slate-200 font-mono">
-                          Norma SENA: {category.competencyCode}
-                        </span>
                         <span className="text-[11px] font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded border border-emerald-300">
                           {categoryRaps.length} {categoryRaps.length === 1 ? 'resultado' : 'resultados'} de aprendizaje
                         </span>
@@ -751,7 +748,7 @@ export const InstructorLearningOutcomesView: React.FC = () => {
               >
                 {ENGLISH_RAP_CATEGORIES.map((cat) => (
                   <option key={cat.id} value={cat.competencyIds[0]}>
-                    Categoría {cat.categoryNumber}: {cat.competencyCode} — {cat.title}
+                    Categoría {cat.categoryNumber}: {cat.title}
                   </option>
                 ))}
               </select>
@@ -844,7 +841,7 @@ export const InstructorLearningOutcomesView: React.FC = () => {
             >
               {ENGLISH_RAP_CATEGORIES.map((cat) => (
                 <option key={cat.id} value={cat.competencyIds[0]}>
-                  Categoría {cat.categoryNumber}: {cat.competencyCode} — {cat.title}
+                  Categoría {cat.categoryNumber}: {cat.title}
                 </option>
               ))}
             </select>

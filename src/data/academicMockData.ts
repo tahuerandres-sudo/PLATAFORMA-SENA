@@ -303,7 +303,6 @@ export const DEMO_COMPETENCIES: Competency[] = [
   {
     id: 'comp_ingles_01',
     name: 'Comprender textos en inglés en forma escrita y auditiva',
-    code: '240201501',
     description:
       'Comprender textos en inglés en forma escrita y auditiva según las necesidades del contexto personal y técnico.',
     type: 'transversal',
@@ -316,7 +315,6 @@ export const DEMO_COMPETENCIES: Competency[] = [
   {
     id: 'comp_ingles_laboral',
     name: 'Interactuar en lengua inglesa de forma oral y escrita',
-    code: '240202501',
     description:
       'Interactuar en lengua inglesa de forma oral y escrita dentro de contextos sociales y laborales según los criterios establecidos por el Marco Común Europeo de Referencia para las Lenguas.',
     type: 'transversal',
@@ -329,7 +327,6 @@ export const DEMO_COMPETENCIES: Competency[] = [
   {
     id: 'comp_ingles_03',
     name: 'Producir textos en inglés en forma escrita y oral',
-    code: '240201502',
     description:
       'Producir textos en inglés en forma escrita y oral según los requerimientos del contexto laboral y social.',
     type: 'transversal',
@@ -342,7 +339,6 @@ export const DEMO_COMPETENCIES: Competency[] = [
   {
     id: 'comp_ingles_04',
     name: 'Interactuar en contextos laborales y productivos en inglés',
-    code: '240202502',
     description:
       'Interactuar en lengua inglesa en contextos laborales y productivos según los criterios de fluidez y precisión del Marco Común Europeo de Referencia para las Lenguas.',
     type: 'transversal',
@@ -355,7 +351,6 @@ export const DEMO_COMPETENCIES: Competency[] = [
   {
     id: 'comp_contabilidad_hechos',
     name: 'Competencia técnica contable',
-    code: '210301019',
     description:
       'Reconocer recursos financieros y contabilizar operaciones de acuerdo con metodología institucional y normativa NIIF.',
     type: 'technical',

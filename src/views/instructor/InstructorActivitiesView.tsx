@@ -355,8 +355,7 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
                     <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200/80 p-2 rounded-lg flex items-center gap-1.5 font-medium">
                       <Award className="w-3.5 h-3.5 text-[#39A900] shrink-0" />
                       <span className="truncate">
-                        <strong>Norma:</strong> {ficha.competencyCode ? `[${ficha.competencyCode}] ` : ''}
-                        {ficha.competencyName}
+                        <strong>Competencia:</strong> {ficha.competencyName}
                       </span>
                     </div>
                   )}

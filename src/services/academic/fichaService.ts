@@ -297,7 +297,7 @@ export const fichaService = {
       description: ficha.description?.trim() || `Ficha ${rawNumber} - ${rawName}`,
       centerId: ficha.centerId || 'center_comercio_servicios',
       centerName: ficha.centerName || '',
-      programId: ficha.programId || '', // Opcional (Requisito 14)
+      programId: ficha.programId ? ficha.programId : undefined, // Opcional (Prompt 45: sin programas ficticios)
       programName: ficha.programName || rawName,
       competencyId: ficha.competencyId || '',
       competencyCode: ficha.competencyCode || '',

@@ -51,7 +51,6 @@ export const InstructorCompetenciesView: React.FC = () => {
   // Modal: Crear
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [name, setName] = useState('');
-  const [code, setCode] = useState('');
   const [type, setType] = useState<'transversal' | 'technical' | 'basic'>('transversal');
   const [description, setDescription] = useState('');
   const [courseId, setCourseId] = useState('');
@@ -61,7 +60,6 @@ export const InstructorCompetenciesView: React.FC = () => {
   // Modal: Editar
   const [editingCompetency, setEditingCompetency] = useState<Competency | null>(null);
   const [editName, setEditName] = useState('');
-  const [editCode, setEditCode] = useState('');
   const [editType, setEditType] = useState<'transversal' | 'technical' | 'basic'>('transversal');
   const [editDescription, setEditDescription] = useState('');
   const [editCourseId, setEditCourseId] = useState('');
@@ -95,6 +93,13 @@ export const InstructorCompetenciesView: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
+      // Limpieza proactiva de códigos de norma existentes en /competencies
+      try {
+        await competencyService.cleanExistingLaborCodes();
+      } catch (err) {
+        console.warn('[InstructorCompetenciesView] Limpieza de códigos omitida:', err);
+      }
+
       const [compsRes, coursesRes, progsRes, fichasRes, rapsRes] = await Promise.all([
         competencyService.getCompetencies(),
         courseService.getCourses(),
@@ -103,7 +108,11 @@ export const InstructorCompetenciesView: React.FC = () => {
         learningOutcomeService.getLearningOutcomes(),
       ]);
 
-      const loadedComps = compsRes.data || [];
+      const loadedComps = (compsRes.data || []).map((c) => {
+        // Garantizar que no se muestre ningún código de norma laboral
+        const { code, ...rest } = c;
+        return rest as Competency;
+      });
       const loadedCourses = coursesRes.data || [];
       const loadedProgs = progsRes.data || [];
       const loadedFichas = fichasRes.data || [];
@@ -136,12 +145,11 @@ export const InstructorCompetenciesView: React.FC = () => {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !code) return;
+    if (!name.trim()) return;
 
     const newComp: Competency = {
       id: `comp_${Date.now()}`,
       name: name.trim(),
-      code: code.trim(),
       type,
       description: description.trim(),
       courseId: courseId || (courses[0]?.id ?? 'course_ingles_laboral'),
@@ -157,19 +165,17 @@ export const InstructorCompetenciesView: React.FC = () => {
       setCompetencies([saved, ...competencies]);
       setIsModalOpen(false);
       setName('');
-      setCode('');
       setDescription('');
-      showToast(`Competencia "${saved.code}" creada exitosamente.`);
+      showToast(`Competencia "${saved.name}" creada exitosamente.`);
     } catch (err: any) {
       showToast(err?.message || 'Error guardando competencia en Firestore.', 'error');
     }
   };
 
-  // 1. Abrir Modal de Edición con datos precargados
+  // 1. Abrir Modal de Edición con datos precargados (sin código de norma laboral)
   const handleOpenEdit = (comp: Competency) => {
     setEditingCompetency(comp);
     setEditName(comp.name || '');
-    setEditCode(comp.code || '');
     setEditType((comp.type as any) || 'transversal');
     setEditDescription(comp.description || '');
     setEditCourseId(comp.courseId || (courses[0]?.id ?? ''));
@@ -177,16 +183,15 @@ export const InstructorCompetenciesView: React.FC = () => {
     setEditFichaId(comp.fichaId || 'all');
   };
 
-  // Guardar Cambios de Edición en Firestore
+  // Guardar Cambios de Edición en Firestore (sin exigir ni enviar código)
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCompetency || !editName.trim() || !editCode.trim()) return;
+    if (!editingCompetency || !editName.trim()) return;
 
     setIsSavingEdit(true);
     try {
       const updated = await competencyService.updateCompetency(editingCompetency.id, {
         name: editName.trim(),
-        code: editCode.trim(),
         type: editType,
         description: editDescription.trim(),
         courseId: editCourseId || editingCompetency.courseId || undefined,
@@ -199,7 +204,7 @@ export const InstructorCompetenciesView: React.FC = () => {
         prev.map((c) => (c.id === updated.id ? updated : c))
       );
 
-      showToast(`Competencia "${updated.code}" actualizada exitosamente.`);
+      showToast(`Competencia "${updated.name}" actualizada exitosamente.`);
       setEditingCompetency(null);
     } catch (err: any) {
       console.error('[InstructorCompetenciesView] Error al actualizar competencia:', err);
@@ -258,7 +263,7 @@ export const InstructorCompetenciesView: React.FC = () => {
       // Actualizar inmediatamente la lista de competencias
       setCompetencies((prev) => prev.filter((c) => c.id !== competencyToDelete.id));
 
-      showToast(`Competencia "${competencyToDelete.code}" eliminada exitosamente.`);
+      showToast(`Competencia "${competencyToDelete.name}" eliminada exitosamente.`);
       setCompetencyToDelete(null);
     } catch (err: any) {
       console.error('[InstructorCompetenciesView] Error al eliminar competencia:', err);
@@ -281,9 +286,8 @@ export const InstructorCompetenciesView: React.FC = () => {
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       const matchName = comp.name.toLowerCase().includes(q);
-      const matchCode = comp.code.toLowerCase().includes(q);
       const matchDesc = comp.description?.toLowerCase().includes(q);
-      return matchName || matchCode || matchDesc;
+      return matchName || matchDesc;
     }
     return true;
   });
@@ -323,7 +327,7 @@ export const InstructorCompetenciesView: React.FC = () => {
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Buscar por nombre, código o norma..."
+              placeholder="Buscar por nombre o descripción de la competencia..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50"
@@ -398,24 +402,25 @@ export const InstructorCompetenciesView: React.FC = () => {
               >
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-bold text-[#00324D] bg-[#EBF8E7] px-2.5 py-1 rounded border border-[#39A900]/20">
-                      Código: {comp.code}
+                    <span className="text-[11px] uppercase font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded border border-slate-200">
+                      {comp.type === 'transversal'
+                        ? 'Competencia Transversal'
+                        : comp.type === 'technical'
+                        ? 'Competencia Técnica'
+                        : 'Competencia Básica'}
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                        {comp.type}
-                      </span>
-                      <span className="text-[10px] font-bold text-[#2E8500] bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        {rapCount} RAPs
-                      </span>
-                    </div>
+                    <span className="text-[10px] font-bold text-[#2E8500] bg-emerald-50 px-2.5 py-1 rounded border border-emerald-200">
+                      {rapCount} RAPs asociados
+                    </span>
                   </div>
 
                   <div>
-                    <h3 className="text-sm font-bold text-slate-900 leading-snug">{comp.name}</h3>
-                    <p className="text-xs text-slate-600 mt-2 italic leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-100">
-                      "{comp.description}"
-                    </p>
+                    <h3 className="text-sm font-bold text-[#00324D] leading-snug">{comp.name}</h3>
+                    {comp.description && (
+                      <p className="text-xs text-slate-600 mt-2 italic leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        "{comp.description}"
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -436,13 +441,13 @@ export const InstructorCompetenciesView: React.FC = () => {
                   )}
                 </div>
 
-                {/* Acciones de Competencia: Editar y Eliminar (Visibles en todas las tarjetas de competencias) */}
+                {/* Acciones de Competencia: Editar y Eliminar */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(comp)}
                     className="px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-[#00324D] bg-slate-100 hover:bg-slate-200/80 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title={`Editar competencia ${comp.code}`}
+                    title={`Editar competencia ${comp.name}`}
                   >
                     <Edit3 className="w-3.5 h-3.5 text-slate-600" />
                     <span>Editar</span>
@@ -452,10 +457,10 @@ export const InstructorCompetenciesView: React.FC = () => {
                     type="button"
                     onClick={() => handleOpenDelete(comp)}
                     className="px-3 py-1.5 text-xs font-semibold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title={`Eliminar competencia ${comp.code}`}
+                    title={`Eliminar competencia ${comp.name}`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>Eliminar competencia</span>
+                    <span>Eliminar</span>
                   </button>
                 </div>
               </div>
@@ -502,35 +507,19 @@ export const InstructorCompetenciesView: React.FC = () => {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Código Norma Laboral *
-              </label>
-              <input
-                type="text"
-                placeholder="Ej: 240202501"
-                required
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Tipo *
-              </label>
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value as any)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
-              >
-                <option value="transversal">Transversal (Bilingüismo / Ética)</option>
-                <option value="technical">Técnica Específica</option>
-                <option value="basic">Básica Institucional</option>
-              </select>
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Tipo de Competencia *
+            </label>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value as any)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            >
+              <option value="transversal">Transversal (Bilingüismo / Ética / Comunicación)</option>
+              <option value="technical">Técnica Específica del Programa</option>
+              <option value="basic">Básica Institucional</option>
+            </select>
           </div>
 
           <div>
@@ -589,7 +578,7 @@ export const InstructorCompetenciesView: React.FC = () => {
         title="Editar Competencia Laboral"
         subtitle={
           editingCompetency
-            ? `Modificar datos de la competencia ${editingCompetency.code} en /competencies`
+            ? `Modificar datos de la competencia "${editingCompetency.name}" en /competencies`
             : ''
         }
         footer={
@@ -639,35 +628,19 @@ export const InstructorCompetenciesView: React.FC = () => {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Código Norma Laboral *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: 240202501"
-                  value={editCode}
-                  onChange={(e) => setEditCode(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Tipo *
-                </label>
-                <select
-                  value={editType}
-                  onChange={(e) => setEditType(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
-                >
-                  <option value="transversal">Transversal (Bilingüismo / Ética)</option>
-                  <option value="technical">Técnica Específica</option>
-                  <option value="basic">Básica Institucional</option>
-                </select>
-              </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Tipo de Competencia *
+              </label>
+              <select
+                value={editType}
+                onChange={(e) => setEditType(e.target.value as any)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              >
+                <option value="transversal">Transversal (Bilingüismo / Ética / Comunicación)</option>
+                <option value="technical">Técnica Específica del Programa</option>
+                <option value="basic">Básica Institucional</option>
+              </select>
             </div>
 
             <div>
@@ -747,7 +720,7 @@ export const InstructorCompetenciesView: React.FC = () => {
         title="Eliminar Competencia de Formación"
         subtitle={
           competencyToDelete
-            ? `${competencyToDelete.name} (Código: ${competencyToDelete.code})`
+            ? `${competencyToDelete.name}`
             : ''
         }
         maxWidth="md"
@@ -849,7 +822,7 @@ export const InstructorCompetenciesView: React.FC = () => {
 
                 <p className="text-xs leading-relaxed">
                   ¿Estás seguro de que deseas eliminar permanentemente la competencia laboral{' '}
-                  <strong className="text-slate-900 font-bold">"{competencyToDelete.name}"</strong> (Código: <span className="font-mono font-bold">{competencyToDelete.code}</span>)?
+                  <strong className="text-slate-900 font-bold">"{competencyToDelete.name}"</strong>?
                 </p>
 
                 <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px]">

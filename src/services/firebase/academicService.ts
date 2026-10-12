@@ -184,7 +184,7 @@ export async function getFichasForInstructor(instructorId: string): Promise<Enri
           console.warn(`[AcademicService] No se pudo contar aprendices para ficha ${ficha.id}`, e);
         }
 
-        let programName = 'Programa en Formación';
+        let programName = ficha.name || ficha.programName || 'Programa en Formación';
         if (ficha.programId) {
           const prog = await getTrainingProgramById(ficha.programId);
           if (prog) programName = prog.name;
@@ -767,11 +767,10 @@ export async function seedAcademicStructure(instructorUid?: string): Promise<See
       }
     }
 
-    // 6. Competencias Institucionales (/competencies) - Requisito 9
+    // 6. Competencias Institucionales (/competencies) - Requisito 9 (Sin códigos de norma laboral)
     const competenciesToSeed = [
       {
         id: 'comp_ingles_laboral',
-        code: '240202501',
         name: 'Interactuar en lengua inglesa en contextos laborales',
         description: 'Interactuar en lengua inglesa de forma oral y escrita dentro de contextos sociales y laborales según los criterios del MCERL.',
         type: 'transversal' as const,
@@ -781,7 +780,6 @@ export async function seedAcademicStructure(instructorUid?: string): Promise<See
       },
       {
         id: 'comp_contabilidad_niif',
-        code: '210303022',
         name: 'Reconocer recursos financieros según normativa contable y NIIF',
         description: 'Reconocer y medir hechos económicos de acuerdo con la normativa contable, tributaria y las políticas de la organización.',
         type: 'technical' as const,
@@ -791,7 +789,6 @@ export async function seedAcademicStructure(instructorUid?: string): Promise<See
       },
       {
         id: 'comp_comunicacion_efectiva',
-        code: '240201524',
         name: 'Desarrollar procesos de comunicación eficaces y asertivos',
         description: 'Desarrollar procesos de comunicación eficaces y asertivos dentro de criterios de racionalidad en el ámbito laboral y social.',
         type: 'transversal' as const,

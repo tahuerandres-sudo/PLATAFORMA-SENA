@@ -124,7 +124,7 @@ export type CompetencyType = 'transversal' | 'technical' | 'basic' | 'other';
 export interface Competency {
   id: string;
   name: string;
-  code: string; // Ej: "240202501"
+  code?: string; // Opcional / Descontinuado: códigos de norma laboral
   description: string;
   type: CompetencyType;
   status: 'active' | 'inactive';

@@ -119,6 +119,11 @@ export const competencyService = {
       createdAt: competency.createdAt || now,
     };
 
+    // Si no tiene código o se eliminó, no persistir 'code'
+    if (!updated.code) {
+      delete (updated as any).code;
+    }
+
     const idx = inMemoryCompetencies.findIndex((c) => c.id === competency.id);
     if (idx !== -1) {
       inMemoryCompetencies[idx] = updated;
@@ -159,7 +164,12 @@ export const competencyService = {
 
     // Actualizar en Firestore
     try {
-      await setDoc(doc(db, COLLECTION, id), cleanUndefined(updated), { merge: true });
+      // Si el código no está definido o es vacío, asegurarnos de removerlo
+      const dataToSave = cleanUndefined(updated);
+      if (!dataToSave.code) {
+        delete dataToSave.code;
+      }
+      await setDoc(doc(db, COLLECTION, id), dataToSave, { merge: true });
     } catch (err: any) {
       console.error(`[competencyService] Error actualizando competencia ${id} en Firestore:`, err);
       throw new Error(`Error en Firestore al actualizar: ${err?.message || 'Permiso denegado'}`);
@@ -174,6 +184,39 @@ export const competencyService = {
     }
 
     return updated;
+  },
+
+  /**
+   * PROMPT 46: Limpieza de códigos de norma laboral existentes en Firestore (/competencies)
+   * Elimina el campo 'code' de todos los documentos existentes en Firestore y en la memoria local
+   */
+  async cleanExistingLaborCodes(): Promise<{ updatedCount: number }> {
+    let updatedCount = 0;
+    try {
+      const snap = await getDocs(collection(db, COLLECTION));
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data();
+        if (data.code !== undefined) {
+          try {
+            const { code, ...rest } = data;
+            await setDoc(doc(db, COLLECTION, docSnap.id), rest, { merge: false });
+            updatedCount++;
+          } catch (err) {
+            console.warn(`[competencyService] No se pudo limpiar código en doc ${docSnap.id}:`, err);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[competencyService] Error consultando /competencies para limpieza:', err);
+    }
+
+    // Limpiar también en el arreglo en memoria
+    inMemoryCompetencies = inMemoryCompetencies.map((comp) => {
+      const { code, ...rest } = comp;
+      return rest as Competency;
+    });
+
+    return { updatedCount };
   },
 
   /**

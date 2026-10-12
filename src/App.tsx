@@ -470,6 +470,7 @@ function AppContent() {
       {/* 1. Encabezado Global con Perfil Real */}
       <Header
         currentRole={currentRole}
+        activeView={activeView}
         onNavigateNotifications={() => handleNavigate('notifications')}
         onNavigateProfile={() => handleNavigate(isInstructor ? 'settings' : 'profile')}
         onNavigateSettings={() => handleNavigate('settings')}

@@ -223,7 +223,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
   // Filtro en Cascada 1: Fichas disponibles según el Programa seleccionado
   const availableFichas = useMemo(() => {
     if (!programId) return allFichas;
-    const filtered = allFichas.filter((f) => f.programId === programId);
+    const filtered = allFichas.filter((f) => !f.programId || f.programId === programId);
     return filtered.length > 0 ? filtered : allFichas;
   }, [allFichas, programId]);
 
@@ -595,9 +595,6 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
                       <Award className="w-4 h-4 text-[#39A900] shrink-0 mt-0.5" />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-[#00324D] bg-white px-2 py-0.5 rounded border border-emerald-300 text-[11px]">
-                            {curFicha.competencyCode || curComp?.code || 'Norma'}
-                          </span>
                           <span className="text-[10px] uppercase font-bold text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
                             {curComp?.type === 'transversal' ? 'Competencia Transversal' : 'Competencia Técnica'}
                           </span>

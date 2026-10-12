@@ -3,7 +3,7 @@
  * SENA Learning Hub - Global Application Header con Firebase Auth
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   GraduationCap,
   Bell,
@@ -23,6 +23,8 @@ import { RolePromotionModal } from '../common/RolePromotionModal';
 
 export type ActiveRole = 'instructor' | 'apprentice' | 'blueprint';
 
+export type ActiveTopMenu = 'notifications' | 'profile' | null;
+
 interface HeaderProps {
   currentRole: ActiveRole;
   onNavigateNotifications: () => void;
@@ -31,6 +33,7 @@ interface HeaderProps {
   onToggleMobileMenu: () => void;
   onNavigateBlueprint: () => void;
   unreadCount?: number;
+  activeView?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -41,21 +44,88 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMobileMenu,
   onNavigateBlueprint,
   unreadCount,
+  activeView,
 }) => {
   const { userProfile, currentUser, logout, isAuthenticated, isInstructor, isApprentice } = useAuth();
-  const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  
+  // PROMPT 47: Estado único controlado para los menús desplegables de la barra superior.
+  // Evita paneles múltiples desplegados en simultáneo y permite alternancia y cierre automático.
+  const [activeMenu, setActiveMenu] = useState<ActiveTopMenu>(null);
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  // Referencias a los contenedores de los menús para detección de clics externos
+  const notificationsContainerRef = useRef<HTMLDivElement>(null);
+  const profileContainerRef = useRef<HTMLDivElement>(null);
 
   const userId = userProfile?.uid || currentUser?.uid || '';
 
   // PROMPT 44: Control de visibilidad estricto según rol verificado en Firestore.
-  // Cuando el rol sea 'apprentice', los botones administrativos 'Autorizar Instructor' y 'Blueprint'
-  // se ocultan completamente de la barra superior sin dejar espacios ni contenedores vacíos.
   const verifiedRole = userProfile?.role;
   const isApprenticeRole = verifiedRole === 'apprentice' || (!verifiedRole && currentRole === 'apprentice') || isApprentice;
   const isInstructorOrAdmin = !isApprenticeRole && (verifiedRole === 'instructor' || currentRole === 'instructor' || isInstructor || (verifiedRole && (verifiedRole as string) !== 'apprentice'));
+
+  // PROMPT 47: Cierre automático al hacer clic fuera de los menús desplegables
+  useEffect(() => {
+    if (!activeMenu) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      if (activeMenu === 'notifications') {
+        if (notificationsContainerRef.current && !notificationsContainerRef.current.contains(target)) {
+          // Si el usuario hace clic en el disparador del perfil, permitimos que el toggle del perfil maneje la transición
+          if (profileContainerRef.current && profileContainerRef.current.contains(target)) {
+            return;
+          }
+          setActiveMenu(null);
+        }
+      } else if (activeMenu === 'profile') {
+        if (profileContainerRef.current && !profileContainerRef.current.contains(target)) {
+          // Si el usuario hace clic en el disparador de notificaciones, permitimos que la campana maneje la transición
+          if (notificationsContainerRef.current && notificationsContainerRef.current.contains(target)) {
+            return;
+          }
+          setActiveMenu(null);
+        }
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveMenu(null);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activeMenu]);
+
+  // PROMPT 47: Cerrar menús al cambiar de vista, rol o sección
+  useEffect(() => {
+    setActiveMenu(null);
+  }, [activeView, currentRole]);
+
+  // PROMPT 47: Cerrar menús al navegar en el historial del navegador (Atrás / Adelante / Hash)
+  useEffect(() => {
+    const handleNavigation = () => {
+      setActiveMenu(null);
+    };
+
+    window.addEventListener('popstate', handleNavigation);
+    window.addEventListener('hashchange', handleNavigation);
+
+    return () => {
+      window.removeEventListener('popstate', handleNavigation);
+      window.removeEventListener('hashchange', handleNavigation);
+    };
+  }, []);
 
   // Suscripción reactiva en tiempo real a las notificaciones desde Firestore
   useEffect(() => {
@@ -102,14 +172,22 @@ export const Header: React.FC<HeaderProps> = ({
         prev.map((n) => (n.id === notif.id ? { ...n, isRead: true, read: true } : n))
       );
     }
-    setShowNotificationsMenu(false);
+    setActiveMenu(null);
     onNavigateNotifications();
   };
 
   const handleLogout = async () => {
-    setShowProfileMenu(false);
+    setActiveMenu(null);
     await logout();
   };
+
+  const handleToggleNotifications = useCallback(() => {
+    setActiveMenu((prev) => (prev === 'notifications' ? null : 'notifications'));
+  }, []);
+
+  const handleToggleProfile = useCallback(() => {
+    setActiveMenu((prev) => (prev === 'profile' ? null : 'profile'));
+  }, []);
 
   return (
     <header className="bg-[#00324D] text-white border-b-4 border-[#39A900] sticky top-0 z-40 shadow-sm">
@@ -117,14 +195,20 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Lado Izquierdo: Botón Menú Móvil + Identidad SENA */}
         <div className="flex items-center gap-3">
           <button
-            onClick={onToggleMobileMenu}
+            onClick={() => {
+              setActiveMenu(null);
+              onToggleMobileMenu();
+            }}
             className="md:hidden p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
             aria-label="Abrir menú"
           >
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex items-center gap-2.5 cursor-pointer">
+          <div
+            onClick={() => setActiveMenu(null)}
+            className="flex items-center gap-2.5 cursor-pointer"
+          >
             <div className="w-9 h-9 rounded-lg bg-[#39A900] flex items-center justify-center font-bold text-lg text-white shadow-xs">
               <GraduationCap className="w-5 h-5" />
             </div>
@@ -151,7 +235,10 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
             {isInstructorOrAdmin && (
               <button
-                onClick={() => setShowPromotionModal(true)}
+                onClick={() => {
+                  setActiveMenu(null);
+                  setShowPromotionModal(true);
+                }}
                 className="ml-1 text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40 transition-colors cursor-pointer"
                 title="Autorizar como Instructor con clave institucional"
               >
@@ -162,7 +249,10 @@ export const Header: React.FC<HeaderProps> = ({
 
           {isInstructorOrAdmin && (
             <button
-              onClick={onNavigateBlueprint}
+              onClick={() => {
+                setActiveMenu(null);
+                onNavigateBlueprint();
+              }}
               className={`px-2.5 py-1.5 rounded-md font-semibold transition-all flex items-center gap-1 cursor-pointer ${
                 currentRole === 'blueprint'
                   ? 'bg-amber-600 text-white shadow-xs'
@@ -178,12 +268,16 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Lado Derecho: Notificaciones + Perfil */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Campanita de Notificaciones (PROMPT 16: Contador real de Firestore) */}
-          <div className="relative">
+          {/* Campanita de Notificaciones (PROMPT 16 y PROMPT 47) */}
+          <div ref={notificationsContainerRef} className="relative">
             <button
-              onClick={() => setShowNotificationsMenu(!showNotificationsMenu)}
-              className="p-2 rounded-lg text-slate-200 hover:text-white hover:bg-slate-800 relative transition-colors cursor-pointer"
+              type="button"
+              onClick={handleToggleNotifications}
+              className={`p-2 rounded-lg text-slate-200 hover:text-white hover:bg-slate-800 relative transition-colors cursor-pointer ${
+                activeMenu === 'notifications' ? 'bg-slate-800/90 text-white ring-1 ring-[#39A900]/40' : ''
+              }`}
               aria-label="Ver notificaciones"
+              aria-expanded={activeMenu === 'notifications'}
             >
               <Bell className="w-5 h-5" />
               {effectiveUnreadCount > 0 && (
@@ -194,7 +288,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {/* Dropdown Notificaciones Rápidas */}
-            {showNotificationsMenu && (
+            {activeMenu === 'notifications' && (
               <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 text-slate-800 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -254,7 +348,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="p-2.5 bg-slate-50 border-t border-slate-100 text-center">
                   <button
                     onClick={() => {
-                      setShowNotificationsMenu(false);
+                      setActiveMenu(null);
                       onNavigateNotifications();
                     }}
                     className="text-xs font-semibold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer w-full py-1"
@@ -266,12 +360,16 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
 
-          {/* Menú de Perfil de Usuario Real */}
-          <div className="relative">
+          {/* Menú de Perfil de Usuario Real (PROMPT 47) */}
+          <div ref={profileContainerRef} className="relative">
             <button
-              onClick={() => setShowProfileMenu(!showProfileMenu)}
-              className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer"
+              type="button"
+              onClick={handleToggleProfile}
+              className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer ${
+                activeMenu === 'profile' ? 'bg-slate-800/90 ring-1 ring-[#39A900]/40' : ''
+              }`}
               aria-label="Menú de usuario"
+              aria-expanded={activeMenu === 'profile'}
             >
               <img
                 src={displayPhoto}
@@ -286,11 +384,11 @@ export const Header: React.FC<HeaderProps> = ({
                   {roleLabel}
                 </div>
               </div>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 hidden sm:block transition-transform duration-150 ${activeMenu === 'profile' ? 'rotate-180 text-white' : ''}`} />
             </button>
 
             {/* Dropdown del perfil */}
-            {showProfileMenu && (
+            {activeMenu === 'profile' && (
               <div className="absolute right-0 mt-2 w-60 bg-white rounded-xl shadow-xl border border-slate-200 text-slate-800 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
                 <div className="px-4 py-2 border-b border-slate-100">
                   <div className="text-xs font-bold text-[#00324D] truncate">{displayName}</div>
@@ -302,7 +400,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   onClick={() => {
-                    setShowProfileMenu(false);
+                    setActiveMenu(null);
                     onNavigateProfile();
                   }}
                   className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
@@ -313,7 +411,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   onClick={() => {
-                    setShowProfileMenu(false);
+                    setActiveMenu(null);
                     onNavigateSettings();
                   }}
                   className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
@@ -326,7 +424,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {userProfile?.role !== 'instructor' && (
                   <button
                     onClick={() => {
-                      setShowProfileMenu(false);
+                      setActiveMenu(null);
                       setShowPromotionModal(true);
                     }}
                     className="w-full text-left px-4 py-2 text-xs text-[#00324D] hover:bg-slate-50 flex items-center gap-2 font-semibold cursor-pointer border-t border-slate-100"
