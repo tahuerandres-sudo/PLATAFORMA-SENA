@@ -16,10 +16,11 @@ import {
 import { db } from '../firebase/config';
 import { FIRESTORE_COLLECTIONS } from '../../config/constants';
 import { TrainingProgram } from '../../types/academic';
+import { DEMO_PROGRAMS } from '../../data/academicMockData';
 
 const COLLECTION = FIRESTORE_COLLECTIONS.TRAINING_PROGRAMS;
 
-let inMemoryPrograms: TrainingProgram[] = [];
+let inMemoryPrograms: TrainingProgram[] = [...DEMO_PROGRAMS];
 
 export const programService = {
   /**

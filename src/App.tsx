@@ -10,6 +10,15 @@ import { Header, ActiveRole } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
 import { Breadcrumbs } from './components/ui/Breadcrumbs';
+import {
+  UserRole,
+  buildCanonicalUrl,
+  parseCurrentUrl,
+  saveRoleNavigation,
+  saveFichaTab,
+  getSavedFichaTab,
+  INSTRUCTOR_ONLY_VIEWS,
+} from './utils/navigationRoutes';
 
 // Vistas de Autenticación
 import { LoginView } from './views/auth/LoginView';
@@ -72,6 +81,7 @@ function AppContent() {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [selectedFichaId, setSelectedFichaId] = useState<string | null>(null);
+  const [selectedFichaTab, setSelectedFichaTab] = useState<string | undefined>(undefined);
   const [selectedFichaInfo, setSelectedFichaInfo] = useState<{ number: string; name: string } | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [accessDeniedWarning, setAccessDeniedWarning] = useState<string | null>(null);
@@ -80,60 +90,187 @@ function AppContent() {
 
   const userId = userProfile?.uid || currentUser?.uid || '';
 
-  // PROMPT 29: Sincronización de URL institucional para Fichas (/instructor/fichas/:fichaId)
-  useEffect(() => {
-    const syncFromUrl = () => {
+  // PROMPT 41: Sincronización de ruta y sección institucional desde la URL actual
+  const syncRouteFromCurrentUrl = useCallback(
+    (role: UserRole) => {
       if (typeof window === 'undefined') return;
-      const path = window.location.pathname;
-      const fichaMatch = path.match(/^\/instructor\/(?:mis-)?fichas\/(.+)$/);
-      if (fichaMatch) {
-        const fId = decodeURIComponent(fichaMatch[1]);
-        setActiveView('fichas');
-        setSelectedFichaId(fId);
-      } else if (path === '/instructor/fichas' || path === '/instructor/mis-fichas') {
-        setActiveView('fichas');
+
+      let targetPath = window.location.pathname;
+      let targetSearch = window.location.search;
+
+      // Recuperar redirección pendiente de login si existía
+      try {
+        const pendingRedirect = window.sessionStorage.getItem('sena_pending_redirect');
+        if (pendingRedirect) {
+          window.sessionStorage.removeItem('sena_pending_redirect');
+          const [pPath, pSearch] = pendingRedirect.split('?');
+          if (pPath && pPath !== '/' && pPath !== '/login') {
+            targetPath = pPath;
+            targetSearch = pSearch ? `?${pSearch}` : '';
+            window.history.replaceState(null, '', pendingRedirect);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
+      const parsed = parseCurrentUrl(targetPath, targetSearch, role);
+
+      if (!parsed.isAuthorized) {
+        setAccessDeniedWarning(
+          parsed.unauthorizedReason ||
+            'Acceso denegado: No cuentas con autorización institucional para acceder a esta sección.'
+        );
+        setActiveView('dashboard');
         setSelectedFichaId(null);
         setSelectedFichaInfo(null);
+        setSelectedFichaTab(undefined);
+        const safeUrl = buildCanonicalUrl(role, 'dashboard');
+        window.history.replaceState(null, '', safeUrl);
+        saveRoleNavigation(role, safeUrl);
+        return;
       }
+
+      setAccessDeniedWarning(null);
+      setActiveView(parsed.viewId);
+      setSelectedRelatedId(parsed.relatedId || null);
+
+      if (parsed.viewId === 'fichas') {
+        if (parsed.fichaId) {
+          setSelectedFichaId(parsed.fichaId);
+          const resolvedTab =
+            parsed.tab ||
+            getSavedFichaTab(role, parsed.fichaId) ||
+            (role === 'instructor' ? 'summary' : 'activities');
+          setSelectedFichaTab(resolvedTab);
+        } else {
+          setSelectedFichaId(null);
+          setSelectedFichaInfo(null);
+          setSelectedFichaTab(undefined);
+        }
+      } else {
+        setSelectedFichaId(null);
+        setSelectedFichaInfo(null);
+        setSelectedFichaTab(undefined);
+      }
+
+      const canonical = buildCanonicalUrl(role, parsed.viewId, {
+        fichaId: parsed.fichaId,
+        tab: parsed.tab,
+        relatedId: parsed.relatedId,
+      });
+
+      if (window.location.pathname !== canonical.split('?')[0]) {
+        window.history.replaceState(null, '', canonical);
+      }
+      saveRoleNavigation(role, window.location.pathname + window.location.search);
+    },
+    []
+  );
+
+  // Inicialización y sincronización una vez validada la autenticación y el rol en Firestore
+  useEffect(() => {
+    if (!loading && isAuthenticated && userProfile) {
+      const activeUserRole: UserRole = userProfile.role === 'instructor' ? 'instructor' : 'apprentice';
+      syncRouteFromCurrentUrl(activeUserRole);
+    }
+  }, [loading, isAuthenticated, userProfile, syncRouteFromCurrentUrl]);
+
+  // Si no está autenticado, almacenar URL solicitada en sessionStorage para preservarla post-login
+  useEffect(() => {
+    if (!loading && !isAuthenticated && typeof window !== 'undefined') {
+      const cur = window.location.pathname + window.location.search;
+      if (cur !== '/' && cur !== '/login') {
+        try {
+          window.sessionStorage.setItem('sena_pending_redirect', cur);
+        } catch {
+          // Ignore
+        }
+      }
+    }
+  }, [loading, isAuthenticated]);
+
+  // Escuchar navegación del historial del navegador (Atrás / Adelante)
+  useEffect(() => {
+    const handlePopState = () => {
+      if (!userProfile) return;
+      const role: UserRole = userProfile.role === 'instructor' ? 'instructor' : 'apprentice';
+      syncRouteFromCurrentUrl(role);
     };
 
-    syncFromUrl();
-    window.addEventListener('popstate', syncFromUrl);
-    return () => window.removeEventListener('popstate', syncFromUrl);
-  }, []);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [userProfile, syncRouteFromCurrentUrl]);
 
-  // PROMPT 29: Handlers estables y memorizados para navegación y carga de Ficha
-  const handleSelectFicha = useCallback((fId: string, fObj?: { number: string; name?: string; programName?: string }) => {
-    setSelectedFichaId(fId);
-    if (fObj) {
-      const fichaName = fObj.name || fObj.programName || `Ficha ${fObj.number}`;
+  // Handlers para navegación y carga de Ficha
+  const handleSelectFicha = useCallback(
+    (fId: string, fObj?: { number: string; name?: string; programName?: string }, tab?: string) => {
+      const role: UserRole = userProfile?.role === 'instructor' ? 'instructor' : 'apprentice';
+      setSelectedFichaId(fId);
+
+      const fichaName = fObj?.name || fObj?.programName || `Ficha ${fObj?.number || fId}`;
+      const fichaNumber = fObj?.number || fId;
       setSelectedFichaInfo((prev) => {
-        if (prev && prev.number === fObj.number && prev.name === fichaName) return prev;
-        return { number: fObj.number, name: fichaName };
+        if (prev && prev.number === fichaNumber && prev.name === fichaName) return prev;
+        return { number: fichaNumber, name: fichaName };
       });
-      if (typeof window !== 'undefined') {
-        window.history.pushState(
-          null,
-          '',
-          `/instructor/fichas/${encodeURIComponent(fObj.number || fId)}`
-        );
+
+      const rememberedTab =
+        tab ||
+        getSavedFichaTab(role, fId) ||
+        (fObj?.number ? getSavedFichaTab(role, fObj.number) : null) ||
+        (role === 'instructor' ? 'summary' : 'activities');
+
+      setSelectedFichaTab(rememberedTab);
+      saveFichaTab(role, fId, rememberedTab);
+      if (fObj?.number) {
+        saveFichaTab(role, fObj.number, rememberedTab);
       }
-    } else if (typeof window !== 'undefined') {
-      window.history.pushState(
-        null,
-        '',
-        `/instructor/fichas/${encodeURIComponent(fId)}`
-      );
-    }
-  }, []);
+
+      if (typeof window !== 'undefined') {
+        const url = buildCanonicalUrl(role, 'fichas', {
+          fichaId: fId,
+          fichaNumber: fObj?.number,
+          tab: rememberedTab,
+        });
+        window.history.pushState(null, '', url);
+        saveRoleNavigation(role, url);
+      }
+    },
+    [userProfile]
+  );
 
   const handleBackToList = useCallback(() => {
+    const role: UserRole = userProfile?.role === 'instructor' ? 'instructor' : 'apprentice';
     setSelectedFichaId(null);
     setSelectedFichaInfo(null);
+    setSelectedFichaTab(undefined);
     if (typeof window !== 'undefined') {
-      window.history.pushState(null, '', '/instructor/fichas');
+      const url = buildCanonicalUrl(role, 'fichas');
+      window.history.pushState(null, '', url);
+      saveRoleNavigation(role, url);
     }
-  }, []);
+  }, [userProfile]);
+
+  const handleFichaTabChange = useCallback(
+    (tab: string) => {
+      const role: UserRole = userProfile?.role === 'instructor' ? 'instructor' : 'apprentice';
+      setSelectedFichaTab(tab);
+      if (selectedFichaId) {
+        saveFichaTab(role, selectedFichaId, tab);
+        if (selectedFichaInfo?.number) {
+          saveFichaTab(role, selectedFichaInfo.number, tab);
+        }
+      }
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', tab);
+        window.history.replaceState(null, '', url.pathname + url.search);
+        saveRoleNavigation(role, url.pathname + url.search);
+      }
+    },
+    [userProfile, selectedFichaId, selectedFichaInfo]
+  );
 
   const handleFichaLoaded = useCallback((fObj: { number: string; name?: string; programName?: string }) => {
     const fichaName = fObj.name || fObj.programName || `Ficha ${fObj.number}`;
@@ -180,43 +317,40 @@ function AppContent() {
   }, [isAuthenticated, userProfile]);
 
   // Manejar intento de acceso a vistas protegidas por rol
-  const handleNavigate = (viewId: string, relatedId?: string) => {
-    setAccessDeniedWarning(null);
+  const handleNavigate = useCallback(
+    (viewId: string, relatedId?: string) => {
+      setAccessDeniedWarning(null);
+      const role: UserRole = userProfile?.role === 'instructor' ? 'instructor' : 'apprentice';
+      const targetView = viewId === 'courses' ? 'fichas' : viewId;
 
-    // Lista de vistas exclusivas del instructor (PROMPT 22: Fichas ahora es común a ambos roles)
-    const instructorOnlyViews = [
-      'apprentices',
-      'competencies',
-      'learning_outcomes',
-      'attendance',
-      'tracking',
-      'attention_calls',
-      'reports',
-      'stats',
-    ];
-    const targetView = viewId === 'courses' ? 'fichas' : viewId;
-    if (isApprentice && instructorOnlyViews.includes(targetView)) {
-      setAccessDeniedWarning(
-        `Acceso denegado: La sección "${targetView}" está restringida únicamente a Instructores autorizados.`
-      );
-      return;
-    }
-
-    // PROMPT 29: Al cambiar de sección principal, resetear ficha seleccionada y actualizar URL limpiamente
-    if (targetView === 'fichas') {
-      setSelectedFichaId(null);
-      setSelectedFichaInfo(null);
-      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/instructor/fichas/')) {
-        window.history.pushState(null, '', '/instructor/fichas');
+      if (role === 'apprentice' && INSTRUCTOR_ONLY_VIEWS.has(targetView)) {
+        setAccessDeniedWarning(
+          `Acceso denegado: La sección "${targetView}" está restringida únicamente a Instructores autorizados.`
+        );
+        return;
       }
-    } else {
-      setSelectedFichaId(null);
-      setSelectedFichaInfo(null);
-    }
 
-    setSelectedRelatedId(relatedId || null);
-    setActiveView(targetView);
-  };
+      if (targetView === 'fichas') {
+        setSelectedFichaId(null);
+        setSelectedFichaInfo(null);
+        setSelectedFichaTab(undefined);
+      } else {
+        setSelectedFichaId(null);
+        setSelectedFichaInfo(null);
+        setSelectedFichaTab(undefined);
+      }
+
+      setSelectedRelatedId(relatedId || null);
+      setActiveView(targetView);
+
+      if (typeof window !== 'undefined') {
+        const url = buildCanonicalUrl(role, targetView, { relatedId });
+        window.history.pushState(null, '', url);
+        saveRoleNavigation(role, url);
+      }
+    },
+    [userProfile]
+  );
 
   // 1. Estado de Carga Inicial
   if (loading) {
@@ -265,7 +399,8 @@ function AppContent() {
   }
 
   // Determinar rol activo real obtenido desde Firestore
-  const currentRole: ActiveRole = activeView === 'blueprint' ? 'blueprint' : (userProfile?.role || 'apprentice');
+  const currentRole: ActiveRole =
+    activeView === 'blueprint' && isInstructor ? 'blueprint' : (userProfile?.role || 'apprentice');
 
   // Rutas para Breadcrumbs
   const getBreadcrumbs = () => {
@@ -283,17 +418,13 @@ function AppContent() {
         { label: roleLabel },
         {
           label: 'Mis Fichas',
-          onClick: () => {
-            setSelectedFichaId(null);
-            setSelectedFichaInfo(null);
-            if (typeof window !== 'undefined') {
-              window.history.pushState(null, '', '/instructor/fichas');
-            }
-          },
+          onClick: handleBackToList,
         },
         {
           label: selectedFichaInfo
             ? `Ficha ${selectedFichaInfo.number} — ${selectedFichaInfo.name}`
+            : selectedFichaId
+            ? `Ficha ${selectedFichaId}`
             : 'Ficha de Formación',
           active: true,
         },
@@ -382,7 +513,7 @@ function AppContent() {
           )}
 
           {/* Vistas según Rol y Estado */}
-          {activeView === 'blueprint' ? (
+          {activeView === 'blueprint' && isInstructor ? (
             <Prompt0CockpitView />
           ) : isInstructor ? (
             /* ===== VISTAS PROTEGIDAS DEL INSTRUCTOR ===== */
@@ -398,9 +529,11 @@ function AppContent() {
               {activeView === 'fichas' && (
                 <InstructorFichasView
                   selectedFichaId={selectedFichaId}
+                  initialTab={selectedFichaTab}
                   onSelectFicha={handleSelectFicha}
                   onBackToList={handleBackToList}
                   onFichaLoaded={handleFichaLoaded}
+                  onTabChange={handleFichaTabChange}
                   onNavigateToApprentices={handleNavigateApprentices}
                   onNavigateToActivities={handleNavigateActivities}
                 />
@@ -444,7 +577,14 @@ function AppContent() {
                 />
               )}
               {activeView === 'fichas' && (
-                <ApprenticeFichasView onNavigateToView={handleNavigate} />
+                <ApprenticeFichasView
+                  selectedFichaId={selectedFichaId}
+                  initialTab={selectedFichaTab}
+                  onSelectFicha={handleSelectFicha}
+                  onBackToList={handleBackToList}
+                  onTabChange={handleFichaTabChange}
+                  onNavigateToView={handleNavigate}
+                />
               )}
               {activeView === 'activities' && (
                 <ApprenticeActivitiesView initialActivityId={selectedRelatedId || undefined} />

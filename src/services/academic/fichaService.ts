@@ -299,6 +299,9 @@ export const fichaService = {
       centerName: ficha.centerName || '',
       programId: ficha.programId || '', // Opcional (Requisito 14)
       programName: ficha.programName || rawName,
+      competencyId: ficha.competencyId || '',
+      competencyCode: ficha.competencyCode || '',
+      competencyName: ficha.competencyName || '',
       instructorIds, // [realInstructorUid] (Requisito 8)
       createdBy: ficha.createdBy || realAuthUid, // real UID (Requisito 9)
       startDate: ficha.startDate || now,
@@ -379,11 +382,13 @@ export const fichaService = {
         CREATE_FIRESTORE_SUCCESS: true,
       });
     } catch (createErr: any) {
-      console.warn('[fichaService] Firestore sync pending (almacenando ficha localmente):', {
+      console.error('[fichaService] Firestore setDoc error al persistir ficha:', {
         documentId: docId,
         code: createErr?.code || 'unknown',
         message: createErr?.message || String(createErr),
       });
+      // Propagar el error para que la UI informe fielmente el fallo y no cierre el formulario
+      throw createErr;
     }
 
     // =========================================================================

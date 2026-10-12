@@ -63,6 +63,9 @@ export interface Ficha {
   programName?: string;
   centerName?: string;
   programId?: string;
+  competencyId?: string; // Identificador real de la competencia asociada (Colección /competencies)
+  competencyCode?: string; // Código oficial de la norma (Ej: "240201501")
+  competencyName?: string; // Nombre completo de la competencia
   centerId: string;
   instructorIds: string[]; // Uno o varios instructores asignados
   startDate: string; // ISO-8601

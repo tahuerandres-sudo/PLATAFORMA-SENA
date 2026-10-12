@@ -42,13 +42,20 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigateBlueprint,
   unreadCount,
 }) => {
-  const { userProfile, currentUser, logout, isAuthenticated } = useAuth();
+  const { userProfile, currentUser, logout, isAuthenticated, isInstructor, isApprentice } = useAuth();
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const userId = userProfile?.uid || currentUser?.uid || '';
+
+  // PROMPT 44: Control de visibilidad estricto según rol verificado en Firestore.
+  // Cuando el rol sea 'apprentice', los botones administrativos 'Autorizar Instructor' y 'Blueprint'
+  // se ocultan completamente de la barra superior sin dejar espacios ni contenedores vacíos.
+  const verifiedRole = userProfile?.role;
+  const isApprenticeRole = verifiedRole === 'apprentice' || (!verifiedRole && currentRole === 'apprentice') || isApprentice;
+  const isInstructorOrAdmin = !isApprenticeRole && (verifiedRole === 'instructor' || currentRole === 'instructor' || isInstructor || (verifiedRole && (verifiedRole as string) !== 'apprentice'));
 
   // Suscripción reactiva en tiempo real a las notificaciones desde Firestore
   useEffect(() => {
@@ -134,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Centro: Indicador de Rol Autenticado Real + Acceso al Blueprint */}
+        {/* Centro: Indicador de Rol Autenticado Real + Acceso al Blueprint (solo para instructores/administradores) */}
         <div className="hidden lg:flex items-center gap-2 text-xs">
           <div className="flex items-center gap-1.5 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-700/80">
             <span className="w-2 h-2 rounded-full bg-[#39A900] animate-pulse" />
@@ -142,7 +149,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="font-bold text-[#8CE665] uppercase tracking-wider text-[11px]">
               {userProfile?.role || currentRole}
             </span>
-            {userProfile?.role !== 'instructor' && (
+            {isInstructorOrAdmin && (
               <button
                 onClick={() => setShowPromotionModal(true)}
                 className="ml-1 text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40 transition-colors cursor-pointer"
@@ -153,18 +160,20 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
 
-          <button
-            onClick={onNavigateBlueprint}
-            className={`px-2.5 py-1.5 rounded-md font-semibold transition-all flex items-center gap-1 cursor-pointer ${
-              currentRole === 'blueprint'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-700'
-            }`}
-            title="Ver especificación de arquitectura y contratos"
-          >
-            <Layers className="w-3.5 h-3.5 text-amber-300" />
-            <span>Blueprint</span>
-          </button>
+          {isInstructorOrAdmin && (
+            <button
+              onClick={onNavigateBlueprint}
+              className={`px-2.5 py-1.5 rounded-md font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                currentRole === 'blueprint'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-700'
+              }`}
+              title="Ver especificación de arquitectura y contratos"
+            >
+              <Layers className="w-3.5 h-3.5 text-amber-300" />
+              <span>Blueprint</span>
+            </button>
+          )}
         </div>
 
         {/* Lado Derecho: Notificaciones + Perfil */}

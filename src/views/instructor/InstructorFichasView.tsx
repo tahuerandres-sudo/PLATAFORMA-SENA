@@ -100,20 +100,29 @@ import { RubricDetailModal } from '../../components/rubrics/RubricDetailModal';
 import { RubricEvaluationViewModal } from '../../components/rubrics/RubricEvaluationViewModal';
 import { Modal } from '../../components/ui/Modal';
 import { StatusBadge } from '../../components/ui/StatusBadge';
+import { AssignCompetencyModal } from '../../components/academic/AssignCompetencyModal';
 import { FichaPlanillaMatriz } from '../../components/academic/FichaPlanillaMatriz';
 import { FichaAsistenciaPlanilla } from '../../components/academic/FichaAsistenciaPlanilla';
 import { useAuth } from '../../hooks/useAuth';
 import { auth } from '../../services/firebase/config';
 import { DEMO_APPRENTICES_LIST } from '../../data/mockData';
+import {
+  normalizeInstructorFichaTab,
+  saveFichaTab,
+  getSavedFichaTab,
+  InstructorFichaTab,
+} from '../../utils/navigationRoutes';
 
 interface InstructorFichasViewProps {
-  onSelectFicha?: (fichaId: string, ficha?: Ficha) => void;
+  onSelectFicha?: (fichaId: string, ficha?: Ficha, tab?: string) => void;
   onNavigateToApprentices?: (fichaNumber?: string) => void;
   onNavigateToActivities?: (fichaNumber?: string) => void;
   initialFichaId?: string;
   selectedFichaId?: string | null;
   onBackToList?: () => void;
   onFichaLoaded?: (ficha: Ficha) => void;
+  initialTab?: string;
+  onTabChange?: (tab: string) => void;
 }
 
 export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
@@ -124,6 +133,8 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   selectedFichaId,
   onBackToList,
   onFichaLoaded,
+  initialTab,
+  onTabChange,
 }) => {
   const { currentUser, userProfile } = useAuth();
   const instructorUid = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid || '';
@@ -140,10 +151,20 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'detail'>('grid');
   const [activeFichaId, setActiveFichaId] = useState<string>(selectedFichaId || initialFichaId || '');
 
-  // 3. Pestañas dentro de la Ficha / Clase (PROMPT 29 & PLANILLA: Pestaña Planilla estilo Google Classroom)
-  const [activeClassTab, setActiveClassTab] = useState<
-    'summary' | 'sheet' | 'activities' | 'apprentices' | 'submissions' | 'grades' | 'attendance' | 'tracking' | 'announcements'
-  >('summary');
+  // 3. Pestañas dentro de la Ficha / Clase (PROMPT 29 & PLANILLA & PROMPT 41: Persistencia de pestañas)
+  const [activeClassTab, setActiveClassTab] = useState<InstructorFichaTab>(() => {
+    if (initialTab) return normalizeInstructorFichaTab(initialTab);
+    if (typeof window !== 'undefined') {
+      const qTab = new URLSearchParams(window.location.search).get('tab');
+      if (qTab) return normalizeInstructorFichaTab(qTab);
+    }
+    const targetFicha = selectedFichaId || initialFichaId;
+    if (targetFicha) {
+      const saved = getSavedFichaTab('instructor', targetFicha);
+      if (saved) return normalizeInstructorFichaTab(saved);
+    }
+    return 'summary';
+  });
 
   // 4. Estadísticas en tiempo real de cada Ficha para el Grid (Google Classroom style)
   const [fichaStats, setFichaStats] = useState<
@@ -276,9 +297,11 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [newAnnouncementMessage, setNewAnnouncementMessage] = useState('');
   const [isPublishingAnnouncement, setIsPublishingAnnouncement] = useState(false);
 
-  // 7. Formulario Crear Ficha (Campos estrictos Sección 6)
+  // 7. Formulario Crear Ficha (Estructura Curricular SENA: Programa → Ficha → Competencia)
   const [newFichaName, setNewFichaName] = useState('');
   const [newFichaNumber, setNewFichaNumber] = useState('');
+  const [newProgramId, setNewProgramId] = useState('');
+  const [newCompetencyId, setNewCompetencyId] = useState('');
   const [newCenterId, setNewCenterId] = useState('');
   const [newShift, setNewShift] = useState<FichaShift>('morning');
   const [newStartDate, setNewStartDate] = useState('');
@@ -288,12 +311,27 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [fichaFormError, setFichaFormError] = useState<string | null>(null);
 
   // Formulario Editar Ficha
+  const [fichaToEdit, setFichaToEdit] = useState<Ficha | null>(null);
   const [editFichaName, setEditFichaName] = useState('');
   const [editFichaNumber, setEditFichaNumber] = useState('');
+  const [editProgramId, setEditProgramId] = useState('');
   const [editProgramName, setEditProgramName] = useState('');
+  const [editCenterId, setEditCenterId] = useState('');
+  const [editCompetencyId, setEditCompetencyId] = useState('');
   const [editShift, setEditShift] = useState<FichaShift>('morning');
   const [editStage, setEditStage] = useState<FichaStage>('lectiva');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editEndDate, setEditEndDate] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [isSavingEditFicha, setIsSavingEditFicha] = useState(false);
+  const [editFichaFormError, setEditFichaFormError] = useState<string | null>(null);
+
+  // PROMPT 42: Modal Dedicado de Asignar Competencia
+  const [isAssignCompetencyModalOpen, setIsAssignCompetencyModalOpen] = useState(false);
+  const [fichaForAssignCompetency, setFichaForAssignCompetency] = useState<Ficha | null>(null);
+
+  // Catálogo completo de competencias formativas
+  const [allCompetencies, setAllCompetencies] = useState<Competency[]>([]);
 
   // PROMPT 27: Estado y funciones para Eliminar Ficha de forma segura
   const [isDeleteFichaModalOpen, setIsDeleteFichaModalOpen] = useState(false);
@@ -313,6 +351,28 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   const [isRemovingLearner, setIsRemovingLearner] = useState(false);
   const [removeLearnerError, setRemoveLearnerError] = useState<string | null>(null);
 
+  // Competencias disponibles para el programa de formación seleccionado en Nueva Ficha
+  const availableCompetenciesForNewFicha = useMemo(() => {
+    if (!newProgramId) return allCompetencies;
+    return allCompetencies.filter((c) => {
+      if (c.programId) {
+        return c.programId === newProgramId;
+      }
+      return true; // Transversal o sin restricción exclusiva de programa
+    });
+  }, [allCompetencies, newProgramId]);
+
+  // Selección reactiva de competencia para nueva ficha
+  useEffect(() => {
+    if (availableCompetenciesForNewFicha.length > 0) {
+      if (!newCompetencyId || !availableCompetenciesForNewFicha.some((c) => c.id === newCompetencyId)) {
+        setNewCompetencyId(availableCompetenciesForNewFicha[0].id);
+      }
+    } else {
+      setNewCompetencyId('');
+    }
+  }, [availableCompetenciesForNewFicha, newCompetencyId]);
+
   // 1. Cargar catálogo principal de fichas del instructor
   const loadFichasAndCatalogs = useCallback(async () => {
     setLoading(true);
@@ -324,19 +384,26 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         console.warn('[InstructorFichasView] Aviso limpieza de huérfanos:', eClean);
       }
 
-      const [fichasRes, progsRes, centersRes] = await Promise.all([
+      const [fichasRes, progsRes, centersRes, compsRes] = await Promise.all([
         fichaService.getFichas(instructorUid),
         programService.getPrograms(),
         centerService.getCenters(),
+        competencyService.getCompetencies(),
       ]);
 
       const loadedFichas = fichasRes.data || [];
       const loadedProgs = progsRes.data || [];
       const loadedCenters = centersRes.data || [];
+      const loadedComps = compsRes.data || [];
 
       setFichas(loadedFichas);
       setPrograms(loadedProgs);
       setCenters(loadedCenters);
+      setAllCompetencies(loadedComps);
+
+      if (loadedProgs.length > 0) {
+        setNewProgramId((prev) => prev || loadedProgs[0].id);
+      }
 
       if (loadedCenters.length > 0) {
         setNewCenterId((prev) => prev || loadedCenters[0].id);
@@ -347,7 +414,10 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       if (targetFicha && loadedFichas.some((f) => f.id === targetFicha || f.number === targetFicha)) {
         setActiveFichaId(targetFicha);
         setViewMode('detail');
-        setActiveClassTab('summary');
+        const qTab = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
+        const savedTab = getSavedFichaTab('instructor', targetFicha);
+        const resolvedTab = normalizeInstructorFichaTab(initialTab || qTab || savedTab || 'summary');
+        setActiveClassTab(resolvedTab);
       }
 
       // Cargar estadísticas reales de cada ficha para las tarjetas de Google Classroom
@@ -408,21 +478,65 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     };
   }, [isBulkMenuOpen]);
 
-  // PROMPT 29 & 30: Sincronización del ID de Ficha seleccionado desde Router / URL
+  // PROMPT 29 & 30 & 41: Sincronización del ID de Ficha y Pestaña seleccionado desde Router / URL
   useEffect(() => {
     if (selectedFichaId) {
       setActiveFichaId((prev) => (prev !== selectedFichaId ? selectedFichaId : prev));
       setViewMode((prev) => (prev !== 'detail' ? 'detail' : prev));
+      const qTab = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
+      const savedTab = getSavedFichaTab('instructor', selectedFichaId);
+      const targetTab = normalizeInstructorFichaTab(initialTab || qTab || savedTab || 'summary');
+      setActiveClassTab(targetTab);
     } else if (selectedFichaId === null) {
       setViewMode((prev) => (prev !== 'grid' ? 'grid' : prev));
       setActiveFichaId((prev) => (prev !== '' ? '' : prev));
     }
-  }, [selectedFichaId]);
+  }, [selectedFichaId, initialTab]);
 
   // Ficha activa en modo detalle
   const activeFicha = useMemo(() => {
     return fichas.find((f) => f.id === activeFichaId || f.number === activeFichaId) || null;
   }, [fichas, activeFichaId]);
+
+  // Sincronizar pestaña activa cuando cambia initialTab
+  useEffect(() => {
+    if (initialTab) {
+      setActiveClassTab(normalizeInstructorFichaTab(initialTab));
+    }
+  }, [initialTab]);
+
+  // Handler seguro para cambiar de pestaña con persistencia en URL y sessionStorage
+  const handleSelectTab = useCallback(
+    (tab: InstructorFichaTab) => {
+      setActiveClassTab(tab);
+      onTabChange?.(tab);
+      const fId = activeFichaId || selectedFichaId;
+      if (fId) {
+        saveFichaTab('instructor', fId, tab);
+        if (activeFicha?.number) {
+          saveFichaTab('instructor', activeFicha.number, tab);
+        }
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href);
+          url.searchParams.set('tab', tab);
+          window.history.replaceState(null, '', url.pathname + url.search);
+        }
+      }
+    },
+    [activeFichaId, selectedFichaId, activeFicha, onTabChange]
+  );
+
+  // Competencias disponibles para el programa en Edición de Ficha
+  const availableCompetenciesForEditFicha = useMemo(() => {
+    const progId = editProgramId || fichaToEdit?.programId || (activeFicha?.programId ?? '');
+    if (!progId) return allCompetencies;
+    return allCompetencies.filter((c) => {
+      if (c.programId) {
+        return c.programId === progId;
+      }
+      return true;
+    });
+  }, [allCompetencies, editProgramId, fichaToEdit, activeFicha]);
 
   // Evitar bucle infinito de re-renders al sincronizar ficha con el componente padre App
   const lastReportedFichaIdRef = useRef<string | null>(null);
@@ -606,7 +720,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     }
   };
 
-  // Guardar nueva Ficha (Sección 6) - Cero dependencia de Cursos
+  // Guardar nueva Ficha (Estructura Curricular SENA: Programa → Ficha → Competencia asociada)
   const handleCreateFichaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFichaFormError(null);
@@ -622,6 +736,16 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       setFichaFormError('El número de ficha es obligatorio.');
       return;
     }
+    if (!newCompetencyId) {
+      setFichaFormError('La competencia asociada es obligatoria. Selecciona una competencia formativa para la ficha.');
+      return;
+    }
+
+    const selectedComp = allCompetencies.find((c) => c.id === newCompetencyId);
+    if (!selectedComp) {
+      setFichaFormError('La competencia seleccionada no es válida o no está disponible en el catálogo.');
+      return;
+    }
 
     setIsSavingFicha(true);
 
@@ -629,9 +753,10 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       const now = new Date().toISOString();
       const fichaId = `ficha_${rawNumber}`;
 
-      // Asignar ID de programa por compatibilidad interna sin requerir input del instructor
-      const defaultProg = programs[0] || null;
-      const programId = defaultProg?.id || 'prog_gestion_academica';
+      // Asignar Programa seleccionado
+      const selectedProg = programs.find((p) => p.id === newProgramId) || programs[0] || null;
+      const programId = selectedProg?.id || 'prog_gestion_academica';
+      const programName = selectedProg?.name || rawName;
 
       const realInstructorUid = auth.currentUser?.uid || instructorUid;
       if (!realInstructorUid) {
@@ -645,7 +770,10 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         name: rawName,
         description: newDescription.trim() || `Ficha ${rawNumber} - ${rawName}`,
         programId,
-        programName: rawName,
+        programName,
+        competencyId: selectedComp.id,
+        competencyCode: selectedComp.code,
+        competencyName: selectedComp.name,
         centerId: newCenterId || centers[0]?.id || 'center_comercio_servicios',
         instructorIds: [realInstructorUid],
         createdBy: realInstructorUid,
@@ -667,6 +795,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       // Limpiar formulario
       setNewFichaName('');
       setNewFichaNumber('');
+      setNewCompetencyId('');
       setNewDescription('');
       setNewStartDate('');
       setNewEndDate('');
@@ -677,6 +806,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
       // Sincronizar catálogo con Firestore de forma reactiva
       await loadFichasAndCatalogs();
+      showToast('Ficha creada con su competencia asociada correctamente');
     } catch (err: any) {
       console.warn('[InstructorFichasView] Error guardando ficha:', err);
       setFichaFormError(err.message || 'No fue posible guardar la ficha.');
@@ -685,28 +815,96 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     }
   };
 
-  // Guardar edición de Ficha
+  // PROMPT 42 & 43: Función reutilizable para abrir formulario de edición de ficha con valores actuales
+  const openEditFichaModal = (targetFicha?: Ficha | null) => {
+    const f = targetFicha || activeFicha;
+    if (!f) return;
+    setFichaToEdit(f);
+    setEditFichaName(f.name || '');
+    setEditFichaNumber(f.number || '');
+    setEditProgramId(f.programId || programs[0]?.id || '');
+    setEditProgramName(f.programName || '');
+    setEditCenterId(f.centerId || centers[0]?.id || '');
+    setEditCompetencyId(f.competencyId || '');
+    setEditShift(f.shift || 'morning');
+    setEditStage(f.stage || 'lectiva');
+    setEditStartDate(f.startDate ? f.startDate.split('T')[0] : '');
+    setEditEndDate(f.endDate ? f.endDate.split('T')[0] : '');
+    setEditDescription(f.description || '');
+    setEditFichaFormError(null);
+    setIsEditFichaModalOpen(true);
+  };
+
+  // PROMPT 42 & 43: Función reutilizable para abrir modal dedicado de asignar competencia
+  const openAssignCompetencyModal = (targetFicha?: Ficha | null) => {
+    const f = targetFicha || activeFicha;
+    if (!f) return;
+    setFichaForAssignCompetency(f);
+    setIsAssignCompetencyModalOpen(true);
+  };
+
+  // Guardar edición de Ficha (PROMPT 43 - Corrección Definitiva)
   const handleEditFichaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeFicha) return;
+    const targetFicha = fichaToEdit || activeFicha;
+    if (!targetFicha) {
+      setEditFichaFormError('No se encontró la ficha de formación a editar.');
+      return;
+    }
+
+    // Validación de campos obligatorios
+    if (!editFichaNumber.trim()) {
+      setEditFichaFormError('El número de ficha del SENA es obligatorio.');
+      return;
+    }
+    if (!editFichaName.trim()) {
+      setEditFichaFormError('El nombre de la ficha es obligatorio.');
+      return;
+    }
+
+    setIsSavingEditFicha(true);
+    setEditFichaFormError(null);
 
     try {
+      const selectedProg = programs.find((p) => p.id === editProgramId);
+      const selectedComp = allCompetencies.find((c) => c.id === editCompetencyId);
+      const selectedCenter = centers.find((c) => c.id === editCenterId);
+
       const updated: Ficha = {
-        ...activeFicha,
-        name: editFichaName.trim() || activeFicha.name,
-        number: editFichaNumber.trim() || activeFicha.number,
-        programName: editProgramName.trim() || activeFicha.programName,
+        ...targetFicha,
+        name: editFichaName.trim(),
+        number: editFichaNumber.trim(),
+        programId: selectedProg?.id || editProgramId || targetFicha.programId,
+        programName: selectedProg?.name || editProgramName.trim() || targetFicha.programName,
+        centerId: selectedCenter?.id || editCenterId || targetFicha.centerId,
+        centerName: selectedCenter?.name || targetFicha.centerName,
+        competencyId: selectedComp?.id || (editCompetencyId ? editCompetencyId : ''),
+        competencyCode: selectedComp?.code || (editCompetencyId ? targetFicha.competencyCode : ''),
+        competencyName: selectedComp?.name || (editCompetencyId ? targetFicha.competencyName : ''),
         shift: editShift,
         stage: editStage,
-        description: editDescription.trim() || activeFicha.description,
+        startDate: editStartDate ? `${editStartDate}T00:00:00.000Z` : targetFicha.startDate,
+        endDate: editEndDate ? `${editEndDate}T23:59:59.000Z` : targetFicha.endDate,
+        description: editDescription.trim() || targetFicha.description,
         updatedAt: new Date().toISOString(),
       };
 
       const saved = await fichaService.saveFicha(updated);
       setFichas((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
       setIsEditFichaModalOpen(false);
-    } catch (err) {
-      console.warn('[InstructorFichasView] Error editando ficha:', err);
+      setFichaToEdit(null);
+
+      // Notificar cambio a componentes interesados y actualizar datos si es la ficha activa
+      if (activeFicha && (activeFicha.id === saved.id || activeFicha.number === saved.number)) {
+        onFichaLoaded?.(saved);
+        await loadActiveFichaClassData();
+      }
+      showToast('Ficha de formación actualizada correctamente en Firestore');
+    } catch (err: any) {
+      console.error('[InstructorFichasView] Error editando ficha:', err);
+      setEditFichaFormError(err.message || 'No fue posible guardar las modificaciones de la ficha.');
+    } finally {
+      setIsSavingEditFicha(false);
     }
   };
 
@@ -2033,9 +2231,42 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 <p className="text-xs text-slate-300 italic pt-1 line-clamp-2">"{activeFicha.description}"</p>
               )}
 
+              {/* Competencia Asociada a la Ficha (Estructura Curricular SENA) */}
+              <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2 text-xs">
+                <div className="flex items-center gap-1.5 font-bold text-[#8CE665]">
+                  <Award className="w-4 h-4 shrink-0" />
+                  <span>Competencia asociada:</span>
+                </div>
+                {activeFicha.competencyId ? (
+                  <span className="bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/20 font-medium inline-flex items-center gap-1.5">
+                    <strong className="font-mono text-[#8CE665] font-bold">
+                      [{activeFicha.competencyCode || allCompetencies.find(c => c.id === activeFicha.competencyId)?.code || 'Norma'}]
+                    </strong>
+                    <span>
+                      {activeFicha.competencyName || allCompetencies.find(c => c.id === activeFicha.competencyId)?.name || 'Competencia vinculada'}
+                    </span>
+                  </span>
+                ) : (
+                  <div className="inline-flex items-center gap-2">
+                    <span className="bg-amber-500/20 text-amber-200 border border-amber-400/40 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                      ⚠️ Sin competencia asignada
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openAssignCompetencyModal(activeFicha)}
+                      className="text-xs text-[#8CE665] underline hover:text-white cursor-pointer font-bold inline-flex items-center gap-1"
+                    >
+                      <Award className="w-3.5 h-3.5" />
+                      Asignar competencia ahora
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Acciones Rápidas del Instructor en la Ficha */}
               <div className="pt-3 flex flex-wrap items-center gap-2">
                 <button
+                  type="button"
                   onClick={() => setIsAddLearnerModalOpen(true)}
                   className="px-3.5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
                 >
@@ -2043,22 +2274,27 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                   + Agregar aprendiz
                 </button>
                 <button
+                  type="button"
                   onClick={() => setIsActivityModalOpen(true)}
                   className="px-3.5 py-2 bg-white text-[#00324D] hover:bg-slate-100 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-4 h-4 text-[#39A900]" />
                   + Nueva actividad
                 </button>
+                {activeFicha.competencyId && (
+                  <button
+                    type="button"
+                    onClick={() => openAssignCompetencyModal(activeFicha)}
+                    className="px-3 py-2 bg-white/10 hover:bg-white/20 text-[#8CE665] hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer"
+                    title="Cambiar competencia asignada a la ficha"
+                  >
+                    <Award className="w-3.5 h-3.5" />
+                    Cambiar competencia
+                  </button>
+                )}
                 <button
-                  onClick={() => {
-                    setEditFichaName(activeFicha.name || '');
-                    setEditFichaNumber(activeFicha.number || '');
-                    setEditProgramName(activeFicha.programName || '');
-                    setEditShift(activeFicha.shift || 'morning');
-                    setEditStage(activeFicha.stage || 'lectiva');
-                    setEditDescription(activeFicha.description || '');
-                    setIsEditFichaModalOpen(true);
-                  }}
+                  type="button"
+                  onClick={() => openEditFichaModal(activeFicha)}
                   className="px-3 py-2 bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/20 flex items-center gap-1.5 cursor-pointer ml-auto"
                   title="Editar información de la Ficha"
                 >
@@ -2067,6 +2303,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => openDeleteFichaModal(activeFicha)}
                   className="px-3 py-2 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-400/40 flex items-center gap-1.5 cursor-pointer"
                   title="Eliminar esta ficha de formación"
@@ -2079,10 +2316,10 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             <div className="absolute -right-8 -bottom-8 w-60 h-60 rounded-full bg-[#39A900]/15 blur-2xl pointer-events-none" />
           </div>
 
-          {/* Pestañas de Navegación Interna de la Ficha (PROMPT 29 Sección 7) */}
+          {/* Pestañas de Navegación Interna de la Ficha (PROMPT 29 Sección 7 & PROMPT 41) */}
           <div className="flex items-center gap-1.5 border-b border-slate-200 overflow-x-auto pb-1 scrollbar-thin">
             <button
-              onClick={() => setActiveClassTab('summary')}
+              onClick={() => handleSelectTab('summary')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'summary'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2093,7 +2330,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Resumen
             </button>
             <button
-              onClick={() => setActiveClassTab('sheet')}
+              onClick={() => handleSelectTab('sheet')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'sheet'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2104,7 +2341,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Planilla
             </button>
             <button
-              onClick={() => setActiveClassTab('activities')}
+              onClick={() => handleSelectTab('activities')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'activities'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2115,7 +2352,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Actividades ({classActivities.length})
             </button>
             <button
-              onClick={() => setActiveClassTab('apprentices')}
+              onClick={() => handleSelectTab('apprentices')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'apprentices'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2126,7 +2363,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Aprendices ({classApprentices.length})
             </button>
             <button
-              onClick={() => setActiveClassTab('submissions')}
+              onClick={() => handleSelectTab('submissions')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'submissions'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2137,7 +2374,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Evidencias ({classSubmissions.length})
             </button>
             <button
-              onClick={() => setActiveClassTab('grades')}
+              onClick={() => handleSelectTab('grades')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'grades'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2148,7 +2385,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Calificaciones
             </button>
             <button
-              onClick={() => setActiveClassTab('attendance')}
+              onClick={() => handleSelectTab('attendance')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'attendance'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2159,7 +2396,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Asistencia
             </button>
             <button
-              onClick={() => setActiveClassTab('tracking')}
+              onClick={() => handleSelectTab('tracking')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'tracking'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2170,7 +2407,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               Seguimiento
             </button>
             <button
-              onClick={() => setActiveClassTab('announcements')}
+              onClick={() => handleSelectTab('announcements')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                 activeClassTab === 'announcements'
                   ? 'bg-[#00324D] text-white shadow-xs'
@@ -2198,7 +2435,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                   {/* Tarjetas de Métricas Reales de Firestore */}
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                     <div
-                      onClick={() => setActiveClassTab('apprentices')}
+                      onClick={() => handleSelectTab('apprentices')}
                       className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
                     >
                       <div className="flex items-center justify-between pb-2">
@@ -2212,7 +2449,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     </div>
 
                     <div
-                      onClick={() => setActiveClassTab('activities')}
+                      onClick={() => handleSelectTab('activities')}
                       className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
                     >
                       <div className="flex items-center justify-between pb-2">
@@ -2226,7 +2463,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     </div>
 
                     <div
-                      onClick={() => setActiveClassTab('submissions')}
+                      onClick={() => handleSelectTab('submissions')}
                       className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs hover:border-[#39A900] transition-all cursor-pointer group"
                     >
                       <div className="flex items-center justify-between pb-2">
@@ -2240,7 +2477,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     </div>
 
                     <div
-                      onClick={() => setActiveClassTab('submissions')}
+                      onClick={() => handleSelectTab('submissions')}
                       className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-2xs hover:border-amber-400 transition-all cursor-pointer group"
                     >
                       <div className="flex items-center justify-between pb-2">
@@ -2256,14 +2493,34 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
 
                   {/* Ficha Técnica Académica (Datos Reales de la Ficha) */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
-                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
                       <div>
                         <h3 className="text-sm font-bold text-[#00324D]">Ficha Técnica del Ambiente Formativo</h3>
                         <p className="text-xs text-slate-500">Parámetros registrados en el Sistema Nacional de Aprendizaje</p>
                       </div>
-                      <span className="text-xs font-mono font-bold text-[#00324D] bg-slate-100 px-3 py-1 rounded-lg">
-                        ID: {activeFicha.id}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openAssignCompetencyModal(activeFicha)}
+                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#2E8500] border border-[#39A900]/30 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer"
+                          title="Gestionar competencia asignada"
+                        >
+                          <Award className="w-3.5 h-3.5" />
+                          <span>{activeFicha.competencyId ? 'Cambiar Competencia' : 'Asignar Competencia'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEditFichaModal(activeFicha)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#00324D] rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer"
+                          title="Editar parámetros de la ficha"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Editar Ficha</span>
+                        </button>
+                        <span className="text-xs font-mono font-bold text-[#00324D] bg-slate-100 px-3 py-1 rounded-lg">
+                          ID: {activeFicha.id}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
@@ -2308,7 +2565,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                           <h4 className="text-xs font-bold text-[#00324D]">Actividades Pedagógicas Recientes</h4>
                         </div>
                         <button
-                          onClick={() => setActiveClassTab('activities')}
+                          onClick={() => handleSelectTab('activities')}
                           className="text-xs font-bold text-[#2E8500] hover:underline cursor-pointer"
                         >
                           Ver todas ({classActivities.length})
@@ -2357,7 +2614,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                           <h4 className="text-xs font-bold text-[#00324D]">Últimos Avisos del Muro</h4>
                         </div>
                         <button
-                          onClick={() => setActiveClassTab('announcements')}
+                          onClick={() => handleSelectTab('announcements')}
                           className="text-xs font-bold text-[#2E8500] hover:underline cursor-pointer"
                         >
                           Ver muro completo
@@ -2368,7 +2625,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                         <div className="py-8 text-center space-y-2">
                           <p className="text-xs text-slate-500">No hay avisos publicados en el muro.</p>
                           <button
-                            onClick={() => setActiveClassTab('announcements')}
+                            onClick={() => handleSelectTab('announcements')}
                             className="px-3.5 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
                           >
                             <Megaphone className="w-3.5 h-3.5" />
@@ -3656,7 +3913,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                       if (selectedActivityForGrading) {
                         setSubmissionFilterActivityId(selectedActivityForGrading.id);
                       }
-                      setActiveClassTab('submissions');
+                      handleSelectTab('submissions');
                       setIsActivitySubmissionsModalOpen(false);
                     }}
                     className="px-3 py-1.5 bg-[#EBF8E7] hover:bg-[#d9f3d2] text-[#2E8500] border border-[#39A900]/30 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer"
@@ -5248,6 +5505,214 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
               <span>{toastMessage}</span>
             </div>
           )}
+
+          {/* Modal Editar Ficha (Dentro de la vista detalle) */}
+          <Modal
+            isOpen={isEditFichaModalOpen}
+            onClose={() => !isSavingEditFicha && setIsEditFichaModalOpen(false)}
+            title="Editar Ficha de Formación"
+            subtitle={activeFicha ? `Ficha #${activeFicha.number} · ID: ${activeFicha.id}` : undefined}
+          >
+            <form onSubmit={handleEditFichaSubmit} className="space-y-4">
+              {editFichaFormError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{editFichaFormError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nombre de la ficha *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editFichaName}
+                  onChange={(e) => setEditFichaName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Número de Ficha *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editFichaNumber}
+                    onChange={(e) => setEditFichaNumber(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-[#39A900]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Jornada Formativa *
+                  </label>
+                  <select
+                    value={editShift}
+                    onChange={(e) => setEditShift(e.target.value as FichaShift)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white"
+                  >
+                    <option value="morning">Diurna (Mañana)</option>
+                    <option value="afternoon">Tarde</option>
+                    <option value="evening">Nocturna</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Programa de Formación *
+                  </label>
+                  <select
+                    value={editProgramId}
+                    onChange={(e) => {
+                      setEditProgramId(e.target.value);
+                      const p = programs.find((prog) => prog.id === e.target.value);
+                      if (p) setEditProgramName(p.name);
+                    }}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium truncate"
+                  >
+                    {programs.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Centro de Formación *
+                  </label>
+                  <select
+                    value={editCenterId}
+                    onChange={(e) => setEditCenterId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white truncate"
+                  >
+                    {centers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Fecha de Inicio
+                  </label>
+                  <input
+                    type="date"
+                    value={editStartDate}
+                    onChange={(e) => setEditStartDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Fecha de Finalización
+                  </label>
+                  <input
+                    type="date"
+                    value={editEndDate}
+                    onChange={(e) => setEditEndDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+                  />
+                </div>
+              </div>
+
+              {/* Competencia Asociada */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                    <span>Competencia asociada</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-normal">
+                    {availableCompetenciesForEditFicha.length} disponibles
+                  </span>
+                </label>
+                {availableCompetenciesForEditFicha.length === 0 ? (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                    No hay competencias registradas para este programa.
+                  </div>
+                ) : (
+                  <select
+                    value={editCompetencyId}
+                    onChange={(e) => setEditCompetencyId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
+                  >
+                    <option value="">-- Sin competencia asociada (o seleccionar después) --</option>
+                    {availableCompetenciesForEditFicha.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Descripción del grupo
+                </label>
+                <textarea
+                  rows={2}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] resize-none"
+                  placeholder="Notas u observaciones de la ficha formativa..."
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSavingEditFicha}
+                  onClick={() => setIsEditFichaModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEditFicha}
+                  className="px-5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingEditFicha ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Guardando cambios...</span>
+                    </>
+                  ) : (
+                    <span>Guardar cambios</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </Modal>
+
+          {/* Modal Dedicado para Asignar Competencia (Dentro de la vista detalle) */}
+          <AssignCompetencyModal
+            isOpen={isAssignCompetencyModalOpen}
+            onClose={() => setIsAssignCompetencyModalOpen(false)}
+            ficha={fichaForAssignCompetency || activeFicha}
+            allCompetencies={allCompetencies}
+            onCompetencyAssigned={(savedFicha) => {
+              setFichas((prev) => prev.map((f) => (f.id === savedFicha.id ? savedFicha : f)));
+              if (activeFicha && (activeFicha.id === savedFicha.id || activeFicha.number === savedFicha.number)) {
+                onFichaLoaded?.(savedFicha);
+                loadActiveFichaClassData();
+              }
+            }}
+            showToast={showToast}
+          />
         </div>
       );
     }
@@ -5365,7 +5830,13 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                   onClick={() => {
                     setActiveFichaId(ficha.id);
                     setViewMode('detail');
-                    onSelectFicha?.(ficha.id, ficha);
+                    const rememberedTab = normalizeInstructorFichaTab(
+                      getSavedFichaTab('instructor', ficha.id) ||
+                      getSavedFichaTab('instructor', ficha.number) ||
+                      'summary'
+                    );
+                    setActiveClassTab(rememberedTab);
+                    onSelectFicha?.(ficha.id, ficha, rememberedTab);
                   }}
                   className="bg-gradient-to-r from-[#00324D] to-[#004A73] p-5 text-white relative overflow-hidden border-b-4 border-[#39A900] cursor-pointer"
                   title={`Entrar a Ficha ${ficha.number}`}
@@ -5391,6 +5862,15 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                     <p className="text-[11px] text-slate-300 truncate">
                       {center?.name || 'Centro de Comercio y Servicios'}
                     </p>
+
+                    {/* Competencia Asociada a la Ficha */}
+                    <div className="pt-1.5 flex items-center gap-1.5 text-[11px] text-[#8CE665] truncate font-medium border-t border-white/10 mt-1.5">
+                      <Award className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">
+                        {ficha.competencyCode ? `[${ficha.competencyCode}] ` : ''}
+                        {ficha.competencyName || (ficha.competencyId ? 'Competencia asignada' : 'Sin competencia')}
+                      </span>
+                    </div>
                   </div>
                   <div className="absolute -right-6 -bottom-6 w-28 h-28 rounded-full bg-[#39A900]/20 blur-xl pointer-events-none" />
                 </div>
@@ -5425,7 +5905,13 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                         onClick={() => {
                           setActiveFichaId(ficha.id);
                           setViewMode('detail');
-                          onSelectFicha?.(ficha.id, ficha);
+                          const rememberedTab = normalizeInstructorFichaTab(
+                            getSavedFichaTab('instructor', ficha.id) ||
+                            getSavedFichaTab('instructor', ficha.number) ||
+                            'summary'
+                          );
+                          setActiveClassTab(rememberedTab);
+                          onSelectFicha?.(ficha.id, ficha, rememberedTab);
                         }}
                         className="flex-1 py-2.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer group-hover:bg-[#39A900]"
                       >
@@ -5434,6 +5920,33 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                       </button>
 
                       <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openAssignCompetencyModal(ficha);
+                        }}
+                        className="p-2.5 bg-slate-50 hover:bg-emerald-50 text-slate-500 hover:text-[#2E8500] rounded-xl transition-all border border-slate-200 hover:border-[#39A900]/40 cursor-pointer"
+                        title={ficha.competencyId ? 'Cambiar competencia' : 'Asignar competencia ahora'}
+                        aria-label="Asignar competencia"
+                      >
+                        <Award className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditFichaModal(ficha);
+                        }}
+                        className="p-2.5 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-[#00324D] rounded-xl transition-all border border-slate-200 hover:border-slate-300 cursor-pointer"
+                        title="Editar información de la ficha"
+                        aria-label="Editar ficha"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => openDeleteFichaModal(ficha)}
                         className="p-2.5 bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl transition-all border border-slate-200 hover:border-rose-200 cursor-pointer"
                         title="Eliminar ficha de formación"
@@ -5462,7 +5975,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       )}
 
       {/* =========================================================================
-          MODAL: CREAR NUEVA FICHA (Sección 6) - CERO CURSOS
+          MODAL: CREAR NUEVA FICHA (Estructura Curricular SENA: Programa → Ficha → Competencia)
          ========================================================================= */}
       <Modal
         isOpen={isCreateFichaModalOpen}
@@ -5471,7 +5984,7 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
       >
         <form onSubmit={handleCreateFichaSubmit} className="space-y-4">
           <p className="text-xs text-slate-500">
-            La ficha representa un grupo o clase de aprendices. No necesitas crear un curso para comenzar a trabajar.
+            La ficha representa un grupo o clase de aprendices. Cada ficha está vinculada a un programa y a una competencia formativa.
           </p>
 
           {fichaFormError && (
@@ -5481,6 +5994,63 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             </div>
           )}
 
+          {/* 1. Programa de Formación */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Programa de Formación *
+            </label>
+            <select
+              required
+              value={newProgramId}
+              onChange={(e) => {
+                setNewProgramId(e.target.value);
+              }}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
+            >
+              {programs.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.code}) · {p.level.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 2. Competencia Asociada * */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                <span>Competencia asociada *</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-normal">
+                {availableCompetenciesForNewFicha.length} disponibles
+              </span>
+            </label>
+            {availableCompetenciesForNewFicha.length === 0 ? (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                No hay competencias disponibles para el programa de formación seleccionado en la colección /competencies.
+              </div>
+            ) : (
+              <select
+                required
+                value={newCompetencyId}
+                onChange={(e) => setNewCompetencyId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
+              >
+                <option value="">-- Selecciona la competencia asociada a la ficha --</option>
+                {availableCompetenciesForNewFicha.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="text-[10px] text-slate-500 mt-1">
+              Estructura curricular SENA: Las actividades que se creen en esta ficha evaluarán exclusivamente los RAPs de esta competencia.
+            </p>
+          </div>
+
+          {/* 3. Nombre descriptivo */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Nombre descriptivo de la ficha / clase *
@@ -5602,13 +6172,21 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         </form>
       </Modal>
 
-      {/* Modal Editar Ficha */}
+      {/* Modal Editar Ficha (PROMPT 42 - Sección 3) */}
       <Modal
         isOpen={isEditFichaModalOpen}
-        onClose={() => setIsEditFichaModalOpen(false)}
+        onClose={() => !isSavingEditFicha && setIsEditFichaModalOpen(false)}
         title="Editar Ficha de Formación"
+        subtitle={activeFicha ? `Ficha #${activeFicha.number} · ID: ${activeFicha.id}` : undefined}
       >
         <form onSubmit={handleEditFichaSubmit} className="space-y-4">
+          {editFichaFormError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{editFichaFormError}</span>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Nombre de la ficha *
@@ -5637,50 +6215,170 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Jornada
+                Jornada Formativa *
               </label>
               <select
                 value={editShift}
                 onChange={(e) => setEditShift(e.target.value as FichaShift)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white"
               >
-                <option value="morning">Diurna</option>
+                <option value="morning">Diurna (Mañana)</option>
                 <option value="afternoon">Tarde</option>
                 <option value="evening">Nocturna</option>
               </select>
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Programa de Formación *
+              </label>
+              <select
+                value={editProgramId}
+                onChange={(e) => {
+                  setEditProgramId(e.target.value);
+                  const p = programs.find((prog) => prog.id === e.target.value);
+                  if (p) setEditProgramName(p.name);
+                }}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium truncate"
+              >
+                {programs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Centro de Formación *
+              </label>
+              <select
+                value={editCenterId}
+                onChange={(e) => setEditCenterId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white truncate"
+              >
+                {centers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Fecha de Inicio
+              </label>
+              <input
+                type="date"
+                value={editStartDate}
+                onChange={(e) => setEditStartDate(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Fecha de Finalización
+              </label>
+              <input
+                type="date"
+                value={editEndDate}
+                onChange={(e) => setEditEndDate(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+              />
+            </div>
+          </div>
+
+          {/* Competencia Asociada */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                <span>Competencia asociada</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-normal">
+                {availableCompetenciesForEditFicha.length} disponibles
+              </span>
+            </label>
+            {availableCompetenciesForEditFicha.length === 0 ? (
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                No hay competencias registradas para este programa.
+              </div>
+            ) : (
+              <select
+                value={editCompetencyId}
+                onChange={(e) => setEditCompetencyId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] bg-white font-medium"
+              >
+                <option value="">-- Sin competencia asociada (o seleccionar después) --</option>
+                {availableCompetenciesForEditFicha.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{c.code}] {c.name} {c.type === 'transversal' ? '(Transversal)' : '(Técnica)'}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Programa de Formación
+              Descripción del grupo
             </label>
-            <input
-              type="text"
-              required
-              value={editProgramName}
-              onChange={(e) => setEditProgramName(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
+            <textarea
+              rows={2}
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900] resize-none"
+              placeholder="Notas u observaciones de la ficha formativa..."
             />
           </div>
 
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
             <button
               type="button"
+              disabled={isSavingEditFicha}
               onClick={() => setIsEditFichaModalOpen(false)}
-              className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold"
+              className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs"
+              disabled={isSavingEditFicha}
+              className="px-5 py-2 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              Guardar cambios
+              {isSavingEditFicha ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Guardando cambios...</span>
+                </>
+              ) : (
+                <span>Guardar cambios</span>
+              )}
             </button>
           </div>
         </form>
       </Modal>
+
+      {/* PROMPT 42: Modal Dedicado para Asignar Competencia (Sección 4) */}
+      <AssignCompetencyModal
+        isOpen={isAssignCompetencyModalOpen}
+        onClose={() => setIsAssignCompetencyModalOpen(false)}
+        ficha={fichaForAssignCompetency || activeFicha}
+        allCompetencies={allCompetencies}
+        onCompetencyAssigned={(savedFicha) => {
+          setFichas((prev) => prev.map((f) => (f.id === savedFicha.id ? savedFicha : f)));
+          if (activeFicha && (activeFicha.id === savedFicha.id || activeFicha.number === savedFicha.number)) {
+            onFichaLoaded?.(savedFicha);
+            loadActiveFichaClassData();
+          }
+        }}
+        showToast={showToast}
+      />
 
       {/* Modal Agregar Aprendiz (cuando se activa desde el grid principal) */}
       <AddLearnerModal

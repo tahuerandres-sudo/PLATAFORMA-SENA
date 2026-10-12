@@ -49,7 +49,7 @@ export const competencyService = {
     try {
       const snap = await getDocs(collection(db, COLLECTION));
       if (!snap.empty) {
-        let results = snap.docs.map((d) => d.data() as Competency);
+        let results = snap.docs.map((d) => ({ ...d.data(), id: d.id } as Competency));
 
         // Combinar con recientes en memoria
         const merged = [

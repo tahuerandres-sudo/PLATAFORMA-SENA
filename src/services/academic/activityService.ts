@@ -25,6 +25,7 @@ import {
 import { submissionService } from '../submissions/submissionService';
 import { notificationService } from './notificationService';
 import { fichaService } from './fichaService';
+import { learningOutcomeService } from './learningOutcomeService';
 import { enrollmentService } from './enrollmentService';
 import { getEnrollmentsForApprentice } from '../firebase/academicService';
 
@@ -338,6 +339,25 @@ export const activityService = {
         const authErr = new Error(`El instructor no está autorizado para administrar actividades en la ficha ${activity.fichaId}.`);
         (authErr as any).code = 'permission-denied';
         throw authErr;
+      }
+    }
+
+    // Validación estricta de relación curricular: Ficha → Competencia asociada → RAP → Actividad
+    if (activity.fichaId) {
+      const ficha = await fichaService.getFichaById(activity.fichaId);
+      if (ficha) {
+        if (!ficha.competencyId) {
+          throw new Error('Esta ficha no tiene una competencia asociada configurada. Asigna una competencia a la ficha antes de registrar actividades.');
+        }
+        if (activity.learningOutcomeId) {
+          const rap = await learningOutcomeService.getLearningOutcomeById(activity.learningOutcomeId);
+          if (rap && rap.competencyId && rap.competencyId !== ficha.competencyId) {
+            throw new Error(`El Resultado de Aprendizaje (RAP) "${rap.code || activity.learningOutcomeId}" pertenece a otra competencia y no es válido para la ficha ${ficha.number}.`);
+          }
+        }
+        if (!updatedActivity.competencyId) {
+          updatedActivity.competencyId = ficha.competencyId;
+        }
       }
     }
 

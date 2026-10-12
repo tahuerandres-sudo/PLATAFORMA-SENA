@@ -43,13 +43,29 @@ import {
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
 import { SubmissionForm } from '../../components/evidence/SubmissionForm';
+import {
+  normalizeApprenticeFichaTab,
+  saveFichaTab,
+  getSavedFichaTab,
+  ApprenticeFichaTab,
+} from '../../utils/navigationRoutes';
 
 interface ApprenticeFichasViewProps {
   onNavigateToView?: (viewId: string) => void;
+  selectedFichaId?: string | null;
+  initialTab?: string;
+  onSelectFicha?: (fichaId: string, ficha?: any, tab?: string) => void;
+  onBackToList?: () => void;
+  onTabChange?: (tab: string) => void;
 }
 
 export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
   onNavigateToView,
+  selectedFichaId,
+  initialTab,
+  onSelectFicha,
+  onBackToList,
+  onTabChange,
 }) => {
   const { currentUser, userProfile } = useAuth();
   const learnerId = currentUser?.uid || userProfile?.uid || '';
@@ -59,7 +75,18 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
   const [selectedEnrollment, setSelectedEnrollment] = useState<EnrichedEnrollment | null>(null);
 
   // Datos específicos de la ficha seleccionada en modo clase
-  const [activeTab, setActiveTab] = useState<'announcements' | 'activities' | 'grades' | 'resources'>('activities');
+  const [activeTab, setActiveTab] = useState<ApprenticeFichaTab>(() => {
+    if (initialTab) return normalizeApprenticeFichaTab(initialTab);
+    if (typeof window !== 'undefined') {
+      const qTab = new URLSearchParams(window.location.search).get('tab');
+      if (qTab) return normalizeApprenticeFichaTab(qTab);
+    }
+    if (selectedFichaId) {
+      const saved = getSavedFichaTab('apprentice', selectedFichaId);
+      if (saved) return normalizeApprenticeFichaTab(saved);
+    }
+    return 'activities';
+  });
   const [fichaActivities, setFichaActivities] = useState<EvidenceActivity[]>([]);
   const [fichaSubmissions, setFichaSubmissions] = useState<AcademicSubmission[]>([]);
   const [fichaAnnouncements, setFichaAnnouncements] = useState<Announcement[]>([]);
@@ -120,6 +147,51 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
 
     loadEnrollments();
   }, [learnerId]);
+
+  // PROMPT 41: Sincronizar ficha seleccionada y pestaña desde props / URL / storage
+  useEffect(() => {
+    if (!selectedFichaId) {
+      setSelectedEnrollment(null);
+      return;
+    }
+    if (enrollments.length > 0) {
+      const match = enrollments.find(
+        (e) =>
+          e.fichaId === selectedFichaId ||
+          e.ficha?.number === selectedFichaId ||
+          e.ficha?.id === selectedFichaId
+      );
+      if (match) {
+        setSelectedEnrollment(match);
+        const qTab = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
+        const savedTab = getSavedFichaTab('apprentice', selectedFichaId);
+        const resolved = normalizeApprenticeFichaTab(initialTab || qTab || savedTab || 'activities');
+        setActiveTab(resolved);
+      }
+    }
+  }, [selectedFichaId, enrollments, initialTab]);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(normalizeApprenticeFichaTab(initialTab));
+    }
+  }, [initialTab]);
+
+  const handleTabClick = (tab: ApprenticeFichaTab) => {
+    setActiveTab(tab);
+    onTabChange?.(tab);
+    if (selectedEnrollment) {
+      saveFichaTab('apprentice', selectedEnrollment.fichaId, tab);
+      if (selectedEnrollment.ficha?.number) {
+        saveFichaTab('apprentice', selectedEnrollment.ficha.number, tab);
+      }
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', tab);
+        window.history.replaceState(null, '', url.pathname + url.search);
+      }
+    }
+  };
 
   // 2. Cargar contenido de la ficha al entrar en modo clase
   useEffect(() => {
@@ -220,7 +292,10 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
         {/* Barra superior de retorno */}
         <div className="flex items-center justify-between pb-2 border-b border-slate-200">
           <button
-            onClick={() => setSelectedEnrollment(null)}
+            onClick={() => {
+              setSelectedEnrollment(null);
+              onBackToList?.();
+            }}
             className="inline-flex items-center gap-2 text-xs font-bold text-[#00324D] hover:text-[#39A900] transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -259,7 +334,7 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
         {/* Pestañas de Navegación de la Clase (Novedades, Actividades, Calificaciones, Recursos) */}
         <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-1 scrollbar-thin">
           <button
-            onClick={() => setActiveTab('activities')}
+            onClick={() => handleTabClick('activities')}
             className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'activities'
                 ? 'bg-[#00324D] text-white shadow-xs'
@@ -270,7 +345,7 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
             Trabajo de Clase ({fichaActivities.length})
           </button>
           <button
-            onClick={() => setActiveTab('announcements')}
+            onClick={() => handleTabClick('announcements')}
             className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'announcements'
                 ? 'bg-[#00324D] text-white shadow-xs'
@@ -281,7 +356,7 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
             Novedades y Muro ({fichaAnnouncements.length})
           </button>
           <button
-            onClick={() => setActiveTab('grades')}
+            onClick={() => handleTabClick('grades')}
             className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'grades'
                 ? 'bg-[#00324D] text-white shadow-xs'
@@ -292,7 +367,7 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
             Mis Calificaciones ({fichaSubmissions.length})
           </button>
           <button
-            onClick={() => setActiveTab('resources')}
+            onClick={() => handleTabClick('resources')}
             className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'resources'
                 ? 'bg-[#00324D] text-white shadow-xs'
@@ -648,7 +723,13 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
 
                 {/* Botón de Entrada a la Ficha (Entrar a la clase) */}
                 <button
-                  onClick={() => setSelectedEnrollment(enr)}
+                  onClick={() => {
+                    setSelectedEnrollment(enr);
+                    const saved = getSavedFichaTab('apprentice', enr.fichaId) || (enr.ficha?.number ? getSavedFichaTab('apprentice', enr.ficha.number) : null);
+                    const resolvedTab = normalizeApprenticeFichaTab(saved || 'activities');
+                    setActiveTab(resolvedTab);
+                    onSelectFicha?.(enr.fichaId, enr.ficha, resolvedTab);
+                  }}
                   className="w-full py-2.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer group-hover:bg-[#39A900]"
                 >
                   <span>Entrar a la ficha</span>

@@ -350,13 +350,28 @@ export const InstructorActivitiesView: React.FC<InstructorActivitiesViewProps> =
                     </p>
                   </div>
 
-                  {/* RAP Asociado */}
+                  {/* Competencia Asociada y RAP */}
+                  {ficha?.competencyName && (
+                    <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200/80 p-2 rounded-lg flex items-center gap-1.5 font-medium">
+                      <Award className="w-3.5 h-3.5 text-[#39A900] shrink-0" />
+                      <span className="truncate">
+                        <strong>Norma:</strong> {ficha.competencyCode ? `[${ficha.competencyCode}] ` : ''}
+                        {ficha.competencyName}
+                      </span>
+                    </div>
+                  )}
+
                   {rap && (
                     <div className="text-[11px] text-slate-600 bg-emerald-50/70 border border-emerald-100 p-2 rounded-lg">
-                      <strong className="text-emerald-800 font-bold block">
-                        Resultado de Aprendizaje (RAP):
-                      </strong>
-                      <span className="line-clamp-1">{rap.description}</span>
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <strong className="text-emerald-800 font-bold block">
+                          Resultado de Aprendizaje (RAP):
+                        </strong>
+                        <span className="text-[10px] font-mono font-bold text-emerald-900 bg-white px-1.5 py-0.2 rounded border border-emerald-200">
+                          {rap.code}
+                        </span>
+                      </div>
+                      <span className="line-clamp-2">{rap.description}</span>
                     </div>
                   )}
 

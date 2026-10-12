@@ -21,6 +21,7 @@ import {
   RefreshCw,
   FolderArchive,
   Sliders,
+  Award,
 } from 'lucide-react';
 import {
   EvidenceActivity,
@@ -28,13 +29,12 @@ import {
   ActivityStatus,
   TrainingProgram,
   Ficha,
+  Competency,
   LearningOutcome,
   Rubric,
 } from '../../types/academic';
-import {
-  getTrainingPrograms,
-  getFichasForInstructor,
-} from '../../services/firebase/academicService';
+import { programService } from '../../services/academic/programService';
+import { competencyService } from '../../services/academic/competencyService';
 import { learningOutcomeService } from '../../services/academic/learningOutcomeService';
 import { activityService } from '../../services/academic/activityService';
 import { rubricService } from '../../services/academic/rubricService';
@@ -65,6 +65,7 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
   // Catálogos reales cargados desde Firestore
   const [allPrograms, setAllPrograms] = useState<TrainingProgram[]>([]);
   const [allFichas, setAllFichas] = useState<Ficha[]>([]);
+  const [allCompetencies, setAllCompetencies] = useState<Competency[]>([]);
   const [learningOutcomes, setLearningOutcomes] = useState<LearningOutcome[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
 
@@ -127,14 +128,18 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
     async function initCatalog() {
       setLoadingCatalog(true);
       try {
-        const [progs, fetchedFichas] = await Promise.all([
-          getTrainingPrograms(),
-          getFichasForInstructor(instructorUid),
+        const [progsRes, fetchedFichasRes, compsRes] = await Promise.all([
+          programService.getPrograms(),
+          fichaService.getFichas(instructorUid),
+          competencyService.getCompetencies(),
         ]);
-        let fList = [...fetchedFichas];
+        const progs = progsRes.data || [];
+        let fList = [...(fetchedFichasRes.data || [])];
+        const comps = compsRes.data || [];
 
         setAllPrograms(progs);
         setAllFichas(fList);
+        setAllCompetencies(comps);
 
         // Inicializar selección si hay actividad en edición
         if (initialActivity) {
@@ -227,31 +232,72 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
     setProgramId(newProgId);
     const matching = allFichas.filter((f) => f.programId === newProgId);
     if (matching.length > 0) {
-      setFichaId(matching[0].id);
+      handleFichaChange(matching[0].id);
     }
   };
 
-  // PROMPT 31: Resultados de Aprendizaje (RAP) disponibles vinculados directamente a la Ficha / Programa
+  // Cambio de Ficha: Limpiar selección previa incompatible de RAP y sincronizar competencia
+  const handleFichaChange = (newFichaId: string) => {
+    setFichaId(newFichaId);
+    setLearningOutcomeId(''); // Limpiar selección de RAP incompatible
+    const newF = allFichas.find((f) => f.id === newFichaId || f.number === newFichaId);
+    if (newF?.programId && newF.programId !== programId) {
+      setProgramId(newF.programId);
+    }
+  };
+
+  // Cadena curricular SENA: Programa → Ficha → Competencia asociada → RAP → Actividad
   useEffect(() => {
     if (!isOpen) return;
     async function loadOutcomes() {
       try {
-        const curFicha = allFichas.find((f) => f.id === fichaId || f.number === fichaId);
-        const effectiveProgId = programId || curFicha?.programId;
-        const res = await learningOutcomeService.getLearningOutcomes(
-          effectiveProgId ? { programId: effectiveProgId } : undefined
-        );
-        let list = res.data || [];
+        let curFicha = allFichas.find((f) => f.id === fichaId || f.number === fichaId);
+
+        // Si la ficha no tiene competencyId en el estado actual, buscar el documento más fresco
+        if (!curFicha?.competencyId && fichaId) {
+          try {
+            const freshF = await fichaService.getFichaById(fichaId);
+            if (freshF && freshF.competencyId) {
+              curFicha = freshF;
+              setAllFichas((prev) => prev.map((f) => (f.id === freshF.id ? freshF : f)));
+            }
+          } catch {
+            // Ignore
+          }
+        }
+
+        // Si la ficha no tiene competencia asociada configurada
+        if (!curFicha?.competencyId) {
+          setLearningOutcomes([]);
+          setLearningOutcomeId('');
+          return;
+        }
+
+        // Consultar los RAPs de la competencia específica de la ficha
+        const res = await learningOutcomeService.getLearningOutcomes({
+          competencyId: curFicha.competencyId,
+        });
+
+        // Filtrar estrictamente por la competencia asignada a la ficha seleccionada
+        const list = (res.data || []).filter((r) => r.competencyId === curFicha.competencyId);
         setLearningOutcomes(list);
-        if (list.length > 0 && (!learningOutcomeId || !list.some((o) => o.id === learningOutcomeId))) {
-          setLearningOutcomeId(list[0].id);
+
+        // Si hay RAPs válidos y el actual no pertenece a la competencia, seleccionar el primero
+        if (list.length > 0) {
+          if (!learningOutcomeId || !list.some((o) => o.id === learningOutcomeId)) {
+            setLearningOutcomeId(list[0].id);
+          }
+        } else {
+          setLearningOutcomeId('');
         }
       } catch (err) {
-        console.warn('[ActivityFormModal] Error cargando RAPs:', err);
+        console.warn('[ActivityFormModal] Error cargando RAPs de la competencia:', err);
+        setLearningOutcomes([]);
+        setLearningOutcomeId('');
       }
     }
     loadOutcomes();
-  }, [isOpen, fichaId, programId, allFichas]);
+  }, [isOpen, fichaId, allFichas]);
 
   // Al cambiar tipo de evidencia, ajustar tamaño sugerido
   const handleTypeChange = (newType: EvidenceType) => {
@@ -279,8 +325,31 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
       return;
     }
 
+    const currentFicha = allFichas.find((f) => f.id === fichaId || f.number === fichaId);
+    if (!currentFicha) {
+      setErrorMessage('Debes seleccionar una Ficha de formación válida.');
+      return;
+    }
+
+    if (!currentFicha.competencyId) {
+      setErrorMessage(
+        'Esta ficha no tiene una competencia asociada o la competencia seleccionada no tiene resultados de aprendizaje registrados. Verifica la configuración curricular antes de crear la actividad.'
+      );
+      return;
+    }
+
     if (!learningOutcomeId) {
-      setErrorMessage('Debes vincular la actividad a un Resultado de Aprendizaje (RAP).');
+      setErrorMessage(
+        'Debes vincular la actividad a un Resultado de Aprendizaje (RAP) perteneciente a la competencia asociada.'
+      );
+      return;
+    }
+
+    const selectedRap = learningOutcomes.find((r) => r.id === learningOutcomeId);
+    if (!selectedRap || selectedRap.competencyId !== currentFicha.competencyId) {
+      setErrorMessage(
+        'El Resultado de Aprendizaje (RAP) seleccionado no pertenece a la competencia asociada a esta ficha.'
+      );
       return;
     }
 
@@ -310,18 +379,18 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
     const now = new Date().toISOString();
     const activityId = initialActivity?.id || `act_${Date.now()}`;
 
-    // Actividad vinculada directamente: Programa → Ficha → RAP → Actividad (PROMPT 31)
+    // Actividad vinculada curricularmente: Programa → Ficha → Competencia → RAP → Actividad
     const newActivity: EvidenceActivity = {
       id: activityId,
       title: title.trim(),
       name: title.trim(),
       description: description.trim(),
       instructions: instructions.trim(),
-      programId: programId || undefined,
+      programId: programId || currentFicha.programId || undefined,
       fichaId,
-      // Si existía un curso/competencia previo (actividad antigua editada), preservarlo; si es nueva queda undefined
+      // Conservar curso y asociar formalmente la competencia de la ficha
       courseId: existingCourseId || undefined,
-      competencyId: existingCompetencyId || undefined,
+      competencyId: currentFicha.competencyId || existingCompetencyId || undefined,
       learningOutcomeId,
       learningOutcomeIds: learningOutcomeId ? [learningOutcomeId] : [], // Soporte multi-RAP
       createdBy: instructorUid,
@@ -490,27 +559,85 @@ export const ActivityFormModal: React.FC<ActivityFormModalProps> = ({
               </div>
             </div>
 
-            {/* 3. Resultado de Aprendizaje (RAP) Asociado */}
+            {/* 3. Competencia Formativa Asociada a la Ficha */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
-                <span>3. Resultado de Aprendizaje (RAP) Asociado *</span>
+                <span className="flex items-center gap-1.5">
+                  <Award className="w-3.5 h-3.5 text-[#39A900]" />
+                  <span>3. Competencia Asociada a la Ficha</span>
+                </span>
                 <span className="text-[10px] text-slate-500 font-normal">
-                  {learningOutcomes.length} RAPs disponibles para el programa / ficha
+                  Estructura Curricular SENA
+                </span>
+              </label>
+
+              {(() => {
+                const curFicha = allFichas.find((f) => f.id === fichaId || f.number === fichaId);
+                const curComp = allCompetencies.find((c) => c.id === curFicha?.competencyId);
+
+                if (!curFicha?.competencyId) {
+                  return (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="block font-bold">Esta ficha no tiene una competencia asociada configurada</strong>
+                        <p className="mt-0.5 text-[11px] text-amber-800 leading-relaxed">
+                          En la estructura curricular del SENA (Programa → Ficha → Competencia asociada → RAP → Actividades), cada ficha debe tener una competencia asignada para determinar sus Resultados de Aprendizaje (RAP). Por favor edita la ficha y asígnale una competencia antes de registrar actividades.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs flex items-center justify-between gap-3">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <Award className="w-4 h-4 text-[#39A900] shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-[#00324D] bg-white px-2 py-0.5 rounded border border-emerald-300 text-[11px]">
+                            {curFicha.competencyCode || curComp?.code || 'Norma'}
+                          </span>
+                          <span className="text-[10px] uppercase font-bold text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded">
+                            {curComp?.type === 'transversal' ? 'Competencia Transversal' : 'Competencia Técnica'}
+                          </span>
+                        </div>
+                        <p className="text-slate-800 font-semibold text-xs mt-1 truncate">
+                          {curFicha.competencyName || curComp?.name || 'Competencia vinculada a la ficha'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white text-emerald-800 border border-emerald-300 shrink-0">
+                      {learningOutcomes.length} RAPs exclusivos
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* 4. Resultado de Aprendizaje (RAP) Asociado */}
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                <span>4. Resultado de Aprendizaje (RAP) de la Competencia *</span>
+                <span className="text-[10px] text-slate-500 font-normal">
+                  {learningOutcomes.length > 0 ? `${learningOutcomes.length} RAPs exclusivos de esta competencia` : 'Sin RAPs'}
                 </span>
               </label>
               {learningOutcomes.length === 0 ? (
-                <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px]">
-                  No hay RAPs registrados directamente para esta ficha o programa. Se conservará la asociación actual.
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>No hay Resultados de Aprendizaje (RAP) registrados para la competencia vinculada a esta ficha.</span>
                 </div>
               ) : (
                 <select
+                  required
                   value={learningOutcomeId}
                   onChange={(e) => setLearningOutcomeId(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900]"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-[#39A900] text-xs font-medium"
                 >
                   {learningOutcomes.map((rap) => (
                     <option key={rap.id} value={rap.id}>
-                      {rap.code} - Sec #{rap.sequence}: {rap.description.slice(0, 85)}...
+                      {rap.code} · {rap.description}
                     </option>
                   ))}
                 </select>
