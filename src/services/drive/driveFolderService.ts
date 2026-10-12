@@ -211,6 +211,43 @@ export const driveFolderService = {
   },
 
   /**
+   * Jerarquía para Anuncios Institucionales (Prompt 48):
+   * SENA Learning Hub / [Programa] / Ficha [Num] / Anuncios / [Anuncio]
+   */
+  async getOrCreateAnnouncementFolderHierarchy(params: {
+    programName?: string;
+    fichaNumber?: string;
+    announcementTitle?: string;
+  }): Promise<FolderPathInfo> {
+    const { programName, fichaNumber, announcementTitle } = params;
+
+    // 1. Carpeta Raíz: "SENA Learning Hub"
+    const rootId = await this.getOrCreateFolder(ROOT_FOLDER_NAME);
+
+    // 2. Carpeta de Programa (si aplica)
+    const cleanProgram = programName && programName.trim() ? programName.trim() : 'General';
+    const programFolderId = await this.getOrCreateFolder(cleanProgram, rootId);
+
+    // 3. Carpeta de Ficha (si aplica)
+    const fichaFolderName = fichaNumber && fichaNumber.trim() ? `Ficha ${fichaNumber.trim()}` : 'General';
+    const fichaFolderId = await this.getOrCreateFolder(fichaFolderName, programFolderId);
+
+    // 4. Carpeta "Anuncios"
+    const announcementsFolderId = await this.getOrCreateFolder('Anuncios', fichaFolderId);
+
+    // 5. Carpeta del Anuncio específico
+    const cleanTitle = (announcementTitle && announcementTitle.trim() ? announcementTitle.trim() : 'Aviso').slice(0, 50);
+    const specificAnnouncementFolderId = await this.getOrCreateFolder(cleanTitle, announcementsFolderId);
+
+    const structuredPath = `${ROOT_FOLDER_NAME} / ${cleanProgram} / ${fichaFolderName} / Anuncios / ${cleanTitle}`;
+
+    return {
+      folderId: specificAnnouncementFolderId,
+      structuredPath,
+    };
+  },
+
+  /**
    * Limpia la memoria caché de carpetas
    */
   clearCache(): void {

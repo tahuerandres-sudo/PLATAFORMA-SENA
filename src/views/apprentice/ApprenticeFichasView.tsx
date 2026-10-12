@@ -49,6 +49,7 @@ import {
   getSavedFichaTab,
   ApprenticeFichaTab,
 } from '../../utils/navigationRoutes';
+import { AnnouncementAttachmentsList } from '../../components/announcements/AnnouncementAttachmentsList';
 
 interface ApprenticeFichasViewProps {
   onNavigateToView?: (viewId: string) => void;
@@ -491,6 +492,7 @@ export const ApprenticeFichasView: React.FC<ApprenticeFichasViewProps> = ({
                         </div>
                         <h4 className="text-sm font-bold text-slate-900">{ann.title}</h4>
                         <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{ann.message}</p>
+                        <AnnouncementAttachmentsList attachments={ann.attachments} />
                       </div>
                     ))}
                   </div>

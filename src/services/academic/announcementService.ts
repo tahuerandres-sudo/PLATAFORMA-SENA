@@ -71,6 +71,7 @@ export const announcementService = {
       courseIds: announcementData.courseIds || [],
       priority: announcementData.priority || 'NORMAL',
       status,
+      attachments: announcementData.attachments || [],
       publishedAt: announcementData.publishedAt || (status === 'PUBLISHED' ? now : ''),
       expiresAt: announcementData.expiresAt,
       createdAt: announcementData.createdAt || now,

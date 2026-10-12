@@ -514,14 +514,27 @@ export const fichaService = {
   },
 
   /**
-   * Verifica si un instructor está asignado a una ficha
+   * Verifica si un instructor está asignado a una ficha (PROMPT 49)
+   * Verifica instructorIds, createdBy y campo singular instructorId
    */
   async isInstructorAssignedToFicha(fichaId: string, instructorId: string): Promise<boolean> {
+    if (!fichaId || !instructorId) return false;
     const ficha = await this.getFichaById(fichaId);
     if (!ficha) return false;
+    const ids = Array.isArray(ficha.instructorIds) ? ficha.instructorIds : [];
     return Boolean(
-      Array.isArray(ficha.instructorIds) && ficha.instructorIds.includes(instructorId)
+      ids.includes(instructorId) ||
+      ficha.createdBy === instructorId ||
+      (ficha as any).instructorId === instructorId
     );
+  },
+
+  /**
+   * Alias de autorización para compatibilidad (PROMPT 49)
+   */
+  async isFichaInstructor(fichaId: string, instructorId?: string): Promise<boolean> {
+    const realUid = instructorId || auth.currentUser?.uid || '';
+    return this.isInstructorAssignedToFicha(fichaId, realUid);
   },
 
   /**

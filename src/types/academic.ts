@@ -549,6 +549,12 @@ export interface AttentionCall {
   improvementPlan?: string; // Texto del plan de mejoramiento estructurado por puntos 1, 2, 3...
   callLevel?: 'PRIMER_LLAMADO' | 'SEGUNDO_LLAMADO' | 'TERCER_LLAMADO';
   apprenticeObservations?: string;
+
+  // PROMPT 50: Envío de correo electrónico y trazabilidad
+  learnerEmail?: string;
+  emailStatus?: 'pending' | 'sent' | 'failed' | 'not_requested';
+  emailSentAt?: string;
+  emailError?: string;
 }
 
 // ==========================================
@@ -719,6 +725,19 @@ export type AnnouncementTargetType = 'ALL' | 'PROGRAM' | 'FICHA' | 'COURSE' | 'U
 export type AnnouncementPriority = 'NORMAL' | 'IMPORTANT' | 'URGENT';
 export type AnnouncementStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 
+export interface AnnouncementAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  storageProvider: 'drive' | 'firestore' | 'storage';
+  driveFileId?: string;
+  downloadUrl?: string; // Direct download / data link
+  viewUrl?: string; // Web view link
+  structuredPath?: string; // e.g. SENA Learning Hub / Programa / Ficha / Anuncios / Anuncio
+  uploadedAt: string;
+}
+
 export interface Announcement {
   id: string;
   title: string;
@@ -733,6 +752,7 @@ export interface Announcement {
   courseIds?: string[];
   priority: AnnouncementPriority;
   status: AnnouncementStatus;
+  attachments?: AnnouncementAttachment[];
   publishedAt: string;
   expiresAt?: string;
   createdAt: string;

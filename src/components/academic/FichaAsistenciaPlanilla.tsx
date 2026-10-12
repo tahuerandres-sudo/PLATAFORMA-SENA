@@ -33,14 +33,21 @@ import {
   CheckCircle2,
   ArrowUpDown,
   ShieldAlert,
+  Mail,
+  Send,
+  Info,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   Ficha,
   ApprenticeWithEnrollment,
   AttendanceRecord,
   AttendanceStatus,
+  AttentionCall,
 } from '../../types/academic';
 import { trackingService } from '../../services/academic/trackingService';
+import { attentionCallEmailClient } from '../../services/academic/attentionCallEmailClient';
+import { notificationService } from '../../services/academic/notificationService';
 import { ApprenticeAcademicProfileModal } from './ApprenticeAcademicProfileModal';
 import { EditAttentionCallModal } from './EditAttentionCallModal';
 import { Modal } from '../ui/Modal';
@@ -69,6 +76,13 @@ interface CellDetailState {
   status: StandardStatus;
   observation: string;
   arrivalTime: string;
+  // PROMPT 50: Integración de Llamados de Atención y Envío de Correo Electrónico
+  generateAttentionCall: boolean;
+  attentionCallReason: string;
+  attentionCallObservations: string;
+  attentionCallCommitments: string;
+  sendEmailNotification: boolean;
+  existingCallId?: string;
 }
 
 interface CellSelectorState {
@@ -95,6 +109,9 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
   const [cellSelector, setCellSelector] = useState<CellSelectorState | null>(null);
   const [isSavingSelectorOption, setIsSavingSelectorOption] = useState<string | null>(null);
 
+  // PROMPT 50: Llamados de atención existentes de la ficha para detección y actualización
+  const [existingAttentionCalls, setExistingAttentionCalls] = useState<AttentionCall[]>([]);
+
   // Sincronizar si cambia initialAttendance
   useEffect(() => {
     if (initialAttendance && initialAttendance.length > 0) {
@@ -120,7 +137,15 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
 
   useEffect(() => {
     reloadAllAttendance();
-  }, [reloadAllAttendance]);
+    if (ficha?.id) {
+      trackingService
+        .getAttentionCalls(ficha.id)
+        .then((res) => {
+          if (res.data) setExistingAttentionCalls(res.data);
+        })
+        .catch((err) => console.warn('[FichaAsistenciaPlanilla] Error cargando llamados de atención:', err));
+    }
+  }, [reloadAllAttendance, ficha?.id]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -471,29 +496,81 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
     }
   };
 
-  // Abrir modal de edición detallada de celda
-  const handleOpenCellDetail = (apprentice: ApprenticeWithEnrollment, date: string) => {
+  // Abrir modal de edición detallada de celda (con opción de llamado de atención)
+  const handleOpenCellDetail = (
+    apprentice: ApprenticeWithEnrollment,
+    date: string,
+    prefillCall?: boolean
+  ) => {
     const rec = attendanceMap.get(`${apprentice.uid}_${date}`);
     const norm = normalizeStatus(rec?.status);
+    const initialStatus: StandardStatus = (norm === '-' ? 'PRESENTE' : norm) as StandardStatus;
+
+    // Buscar si ya existe un llamado de atención para este aprendiz y sesión
+    const existingCall = existingAttentionCalls.find(
+      (c) =>
+        (c.userId === apprentice.uid || c.learnerId === apprentice.uid) &&
+        (c.date === date || (rec?.id && c.relatedAttendanceId === rec.id))
+    );
+
+    const hasExisting = Boolean(existingCall);
+    const shouldGenerate = prefillCall !== undefined ? prefillCall : hasExisting;
+
     setEditingCell({
       apprentice,
       date,
-      status: (norm === '-' ? 'PRESENTE' : norm) as StandardStatus,
+      status: initialStatus,
       observation: rec?.observation || '',
       arrivalTime: rec?.arrivalTime || '',
+      generateAttentionCall: shouldGenerate,
+      existingCallId: existingCall?.id,
+      attentionCallReason: existingCall?.reason || (
+        initialStatus === 'TARDE'
+          ? 'Llegada tarde a la sesión de formación programada'
+          : initialStatus === 'AUSENTE'
+          ? 'Inasistencia no justificada a sesión de formación'
+          : ''
+      ),
+      attentionCallObservations: existingCall?.description || rec?.observation || '',
+      attentionCallCommitments: existingCall?.improvementPlan || (
+        initialStatus === 'TARDE'
+          ? '1. Presentar por escrito compromiso pedagógico de puntualidad.\n2. Nivelar las actividades desarrolladas al inicio de la sesión.\n3. Acatar los horarios estipulados en el Reglamento del Aprendiz SENA.'
+          : '1. Consultar el estado del registro en la plataforma SENA Learning Hub.\n2. Presentar descargos o justificación formal con soportes dentro de los 3 días hábiles siguientes.\n3. Nivelar las actividades y evidencias pendientes del programa de formación.'
+      ),
+      sendEmailNotification: true,
     });
     setCellModalOpen(true);
   };
 
-  // Guardar detalle de celda desde modal
+  // Guardar detalle de celda desde modal (Asistencia + Llamado de atención opcional + Correo electrónico)
   const handleSaveCellDetail = async () => {
     if (!editingCell) return;
+    const {
+      apprentice,
+      date,
+      status,
+      observation,
+      arrivalTime,
+      generateAttentionCall,
+      attentionCallReason,
+      attentionCallObservations,
+      attentionCallCommitments,
+      sendEmailNotification,
+      existingCallId,
+    } = editingCell;
+
+    // Validación si el instructor seleccionó generar llamado de atención
+    if (generateAttentionCall && !attentionCallReason.trim()) {
+      showToast('Debes ingresar el motivo del llamado de atención.');
+      return;
+    }
+
     setIsSavingCell(true);
-    const { apprentice, date, status, observation, arrivalTime } = editingCell;
     const cellKey = `${apprentice.uid}_${date}`;
     const currentRec = attendanceMap.get(cellKey);
 
     try {
+      // 1. Guardar o actualizar asistencia en Firestore (/attendance)
       const res = await trackingService.recordAttendance({
         id: currentRec?.id,
         fichaId: ficha.id,
@@ -530,7 +607,105 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
       if (onAttendanceUpdated) {
         onAttendanceUpdated(updatedList);
       }
-      showToast(`Guardado: ${statusLabels[status]}`);
+
+      // 2. Procesar Llamado de Atención si está activo (PROMPT 50)
+      if (generateAttentionCall) {
+        const nowIso = new Date().toISOString();
+        const callId = existingCallId || `call_att_${updatedRecord.id}_${Date.now()}`;
+        const noveltyType = status === 'TARDE' ? 'TARDANZA' : status === 'AUSENTE' ? 'INASISTENCIA' : 'OTRO';
+
+        const callPayload: AttentionCall = {
+          id: callId,
+          learnerId: apprentice.uid,
+          userId: apprentice.uid,
+          learnerName: apprentice.displayName,
+          learnerDocument: apprentice.documentNumber,
+          learnerEmail: apprentice.email || '',
+          fichaId: ficha.id,
+          fichaNumber: ficha.number,
+          programId: ficha.programId || ficha.id,
+          programName: ficha.programName || ficha.name || 'Programa de Formación SENA',
+          type: noveltyType,
+          reason: attentionCallReason.trim(),
+          description: attentionCallObservations.trim() || observation.trim() || attentionCallReason.trim(),
+          improvementPlan: attentionCallCommitments.trim(),
+          date,
+          time: arrivalTime || '12:00',
+          dateTimeDetail: `${date} ${arrivalTime || ''}`.trim(),
+          createdBy: instructorUid,
+          instructorName,
+          status: 'NOTIFICADO',
+          relatedAttendanceId: updatedRecord.id,
+          centerName: 'Centro de Formación SENA',
+          regionalName: 'Regional SENA',
+          normativeArticle:
+            status === 'TARDE'
+              ? 'No cumplimiento del CAPÍTULO III. Artículo 8o. Deberes del aprendiz SENA - 5. Asistir con puntualidad a todas las actividades propias del proceso de formación.'
+              : 'No cumplimiento del CAPÍTULO III. Artículo 8o. Deberes del aprendiz SENA - 7. Justificar debidamente las inasistencias o incumplimientos a las actividades de la formación.',
+          callLevel: 'PRIMER_LLAMADO',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          emailStatus: sendEmailNotification && apprentice.email ? 'pending' : 'not_requested',
+        };
+
+        let savedCall: AttentionCall;
+        if (existingCallId) {
+          savedCall = await trackingService.updateAttentionCall(existingCallId, callPayload);
+        } else {
+          savedCall = await trackingService.createAttentionCall(callPayload);
+        }
+
+        setExistingAttentionCalls((prev) => {
+          const filtered = prev.filter((c) => c.id !== savedCall.id);
+          return [savedCall, ...filtered];
+        });
+
+        // Notificación interna en la plataforma
+        notificationService
+          .notifyAttentionCall({
+            callId: savedCall.id,
+            userId: apprentice.uid,
+            callType: savedCall.type,
+            reason: savedCall.reason,
+          })
+          .catch((e) => console.warn('[FichaAsistenciaPlanilla] Error en notificación:', e));
+
+        // 3. Envío real de correo electrónico institucional mediante endpoint seguro
+        if (sendEmailNotification && apprentice.email) {
+          const emailRes = await attentionCallEmailClient.sendEmail({
+            callId: savedCall.id,
+            apprenticeName: apprentice.displayName,
+            apprenticeEmail: apprentice.email,
+            apprenticeDocument: apprentice.documentNumber,
+            fichaNumber: ficha.number,
+            programName: ficha.programName || ficha.name,
+            sessionDate: date,
+            noveltyType: noveltyType === 'TARDANZA' ? 'TARDANZA' : noveltyType === 'INASISTENCIA' ? 'INASISTENCIA' : 'OTRO',
+            reason: savedCall.reason,
+            instructorName,
+            instructorObservations: savedCall.description,
+            improvementCommitments: savedCall.improvementPlan,
+          });
+
+          const finalEmailStatus = emailRes.success ? 'sent' : 'failed';
+          await trackingService.updateAttentionCall(savedCall.id, {
+            emailStatus: finalEmailStatus,
+            emailSentAt: emailRes.sentAt || new Date().toISOString(),
+            emailError: emailRes.error,
+          });
+
+          if (emailRes.success) {
+            showToast(`Asistencia guardada, llamado radicado y correo enviado a ${apprentice.email}`);
+          } else {
+            showToast(`Asistencia guardada y llamado radicado. (${emailRes.message})`);
+          }
+        } else {
+          showToast(`Asistencia guardada y llamado de atención radicado en Firestore.`);
+        }
+      } else {
+        showToast(`Guardado: ${statusLabels[status]}`);
+      }
+
       setCellModalOpen(false);
       setEditingCell(null);
     } catch (err: any) {
@@ -1566,7 +1741,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
             ? `${editingCell.apprentice.displayName} — Sesión ${editingCell.date}`
             : ''
         }
-        maxWidth="md"
+        maxWidth="lg"
       >
         {editingCell && (
           <div className="space-y-4 pt-2">
@@ -1602,7 +1777,21 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 {/* 2. No asistió (Falla sin excusa - F) */}
                 <button
                   type="button"
-                  onClick={() => setEditingCell((p) => p && { ...p, status: 'AUSENTE' })}
+                  onClick={() =>
+                    setEditingCell((p) =>
+                      p
+                        ? {
+                            ...p,
+                            status: 'AUSENTE',
+                            attentionCallReason:
+                              p.attentionCallReason &&
+                              p.attentionCallReason !== 'Llegada tarde a la sesión de formación programada'
+                                ? p.attentionCallReason
+                                : 'Inasistencia no justificada a sesión de formación',
+                          }
+                        : null
+                    )
+                  }
                   className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
                     editingCell.status === 'AUSENTE'
                       ? 'bg-rose-600 text-white border-rose-700 shadow-xs ring-2 ring-rose-300'
@@ -1626,7 +1815,17 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 {/* 3. No asistió con excusa (Ausencia justificada - J) */}
                 <button
                   type="button"
-                  onClick={() => setEditingCell((p) => p && { ...p, status: 'EXCUSADO' })}
+                  onClick={() =>
+                    setEditingCell((p) =>
+                      p
+                        ? {
+                            ...p,
+                            status: 'EXCUSADO',
+                            generateAttentionCall: false,
+                          }
+                        : null
+                    )
+                  }
                   className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
                     editingCell.status === 'EXCUSADO'
                       ? 'bg-blue-600 text-white border-blue-700 shadow-xs ring-2 ring-blue-300'
@@ -1650,7 +1849,21 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 {/* 4. Llegó tarde (Tardanza sin excusa - T) */}
                 <button
                   type="button"
-                  onClick={() => setEditingCell((p) => p && { ...p, status: 'TARDE' })}
+                  onClick={() =>
+                    setEditingCell((p) =>
+                      p
+                        ? {
+                            ...p,
+                            status: 'TARDE',
+                            attentionCallReason:
+                              p.attentionCallReason &&
+                              p.attentionCallReason !== 'Inasistencia no justificada a sesión de formación'
+                                ? p.attentionCallReason
+                                : 'Llegada tarde a la sesión de formación programada',
+                          }
+                        : null
+                    )
+                  }
                   className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
                     editingCell.status === 'TARDE'
                       ? 'bg-amber-600 text-white border-amber-700 shadow-xs ring-2 ring-amber-300'
@@ -1674,7 +1887,17 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 {/* 5. Llegó tarde con excusa (Tardanza justificada - T/J) */}
                 <button
                   type="button"
-                  onClick={() => setEditingCell((p) => p && { ...p, status: 'TARDE_EXCUSADO' })}
+                  onClick={() =>
+                    setEditingCell((p) =>
+                      p
+                        ? {
+                            ...p,
+                            status: 'TARDE_EXCUSADO',
+                            generateAttentionCall: false,
+                          }
+                        : null
+                    )
+                  }
                   className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer sm:col-span-2 ${
                     editingCell.status === 'TARDE_EXCUSADO'
                       ? 'bg-purple-600 text-white border-purple-700 shadow-xs ring-2 ring-purple-300'
@@ -1697,18 +1920,30 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Hora de llegada (Opcional)
-              </label>
-              <input
-                type="time"
-                value={editingCell.arrivalTime}
-                onChange={(e) =>
-                  setEditingCell((p) => p && { ...p, arrivalTime: e.target.value })
-                }
-                className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white font-mono"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Hora de llegada (Opcional)
+                </label>
+                <input
+                  type="time"
+                  value={editingCell.arrivalTime}
+                  onChange={(e) =>
+                    setEditingCell((p) => p && { ...p, arrivalTime: e.target.value })
+                  }
+                  className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Correo del aprendiz (Destinatario)
+                </label>
+                <div className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 font-mono text-slate-700 truncate flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span>{editingCell.apprentice.email || 'Sin correo registrado'}</span>
+                </div>
+              </div>
             </div>
 
             <div>
@@ -1716,7 +1951,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 Observación Pedagógica / Motivo de la Excusa
               </label>
               <textarea
-                rows={3}
+                rows={2}
                 placeholder="Ejemplo: Justificación radicada con incapacidad médica EPS, permiso laboral formal, calamidad doméstica..."
                 value={editingCell.observation}
                 onChange={(e) =>
@@ -1725,8 +1960,236 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 className="w-full p-2.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-white resize-none"
               />
               <p className="text-[11px] text-slate-400 mt-0.5">
-                Esta observación quedará guardada en el historial del aprendiz en Firestore.
+                Esta observación quedará guardada en el historial de asistencia del aprendiz en Firestore.
               </p>
+            </div>
+
+            {/* SECCIÓN OFICIAL: LLAMADO DE ATENCIÓN (PROMPT 50) */}
+            <div className="pt-3 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                      editingCell.generateAttentionCall
+                        ? 'bg-rose-100 text-rose-700 border border-rose-300'
+                        : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="toggle-gen-call"
+                      className="text-xs font-bold text-slate-900 cursor-pointer block"
+                    >
+                      Llamado de atención
+                    </label>
+                    <span className="text-[11px] text-slate-500 block">
+                      {editingCell.generateAttentionCall
+                        ? 'Se radicará en el expediente disciplinario y se notificará al aprendiz'
+                        : 'Opcional. El registro de asistencia se guardará sin llamado de atención'}
+                    </span>
+                  </div>
+                </div>
+
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    id="toggle-gen-call"
+                    type="checkbox"
+                    checked={editingCell.generateAttentionCall}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setEditingCell((prev) => {
+                        if (!prev) return null;
+                        return {
+                          ...prev,
+                          generateAttentionCall: checked,
+                          sendEmailNotification: checked ? true : prev.sendEmailNotification,
+                          attentionCallReason:
+                            prev.attentionCallReason ||
+                            (prev.status === 'TARDE'
+                              ? 'Llegada tarde a la sesión de formación programada'
+                              : prev.status === 'AUSENTE'
+                              ? 'Inasistencia no justificada a sesión de formación'
+                              : 'Incumplimiento de compromisos de formación'),
+                          attentionCallObservations:
+                            prev.attentionCallObservations || prev.observation,
+                          attentionCallCommitments:
+                            prev.attentionCallCommitments ||
+                            (prev.status === 'TARDE'
+                              ? '1. Presentar por escrito compromiso pedagógico de puntualidad.\n2. Nivelar las actividades desarrolladas al inicio de la sesión.\n3. Acatar los horarios estipulados en el Reglamento del Aprendiz SENA.'
+                              : '1. Consultar el estado del registro en la plataforma SENA Learning Hub.\n2. Presentar descargos o justificación formal con soportes dentro de los 3 días hábiles siguientes.\n3. Nivelar las actividades y evidencias pendientes del programa de formación.'),
+                        };
+                      });
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-600"></div>
+                </label>
+              </div>
+
+              {/* Mensaje informativo cuando la novedad es con excusa */}
+              {(editingCell.status === 'EXCUSADO' || editingCell.status === 'TARDE_EXCUSADO') && (
+                <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-[11px] flex items-start gap-2">
+                  <Info className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
+                  <div>
+                    <strong className="font-bold">Novedad con soporte o excusa:</strong> El aprendiz
+                    cuenta con justificación registrada para esta fecha. No se recomienda generar un
+                    llamado de atención por falta injustificada.
+                  </div>
+                </div>
+              )}
+
+              {/* Formulario desplegado si el instructor activa el llamado */}
+              {editingCell.generateAttentionCall && (
+                <div className="p-3.5 bg-rose-50/50 border border-rose-200 rounded-xl space-y-3 animate-in fade-in duration-150">
+                  {/* Motivo del llamado */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Motivo del llamado *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej: Inasistencia no justificada a sesión de formación"
+                      value={editingCell.attentionCallReason}
+                      onChange={(e) =>
+                        setEditingCell((p) => p && { ...p, attentionCallReason: e.target.value })
+                      }
+                      className="w-full px-3 py-1.5 text-xs border border-rose-300 rounded-lg focus:outline-none focus:border-rose-600 bg-white"
+                    />
+
+                    {/* Botones de sugerencias rápidas oficiales SENA */}
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingCell(
+                            (p) =>
+                              p && {
+                                ...p,
+                                attentionCallReason:
+                                  'Inasistencia no justificada a sesión de formación',
+                              }
+                          )
+                        }
+                        className="text-[10px] bg-white border border-rose-200 hover:bg-rose-100/70 text-rose-800 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                      >
+                        Inasistencia no justificada
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingCell(
+                            (p) =>
+                              p && {
+                                ...p,
+                                attentionCallReason:
+                                  'Llegada tarde a la sesión de formación programada',
+                              }
+                          )
+                        }
+                        className="text-[10px] bg-white border border-rose-200 hover:bg-rose-100/70 text-rose-800 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                      >
+                        Llegada tarde
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingCell(
+                            (p) =>
+                              p && {
+                                ...p,
+                                attentionCallReason:
+                                  'Incumplimiento reiterado en el horario de formación',
+                              }
+                          )
+                        }
+                        className="text-[10px] bg-white border border-rose-200 hover:bg-rose-100/70 text-rose-800 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                      >
+                        Incumplimiento de horario
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Observaciones del instructor */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Observaciones del instructor
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Detalla las circunstancias de la novedad formativa observada..."
+                      value={editingCell.attentionCallObservations}
+                      onChange={(e) =>
+                        setEditingCell(
+                          (p) => p && { ...p, attentionCallObservations: e.target.value }
+                        )
+                      }
+                      className="w-full p-2 text-xs border border-rose-200 rounded-lg focus:outline-none focus:border-rose-600 bg-white resize-none"
+                    />
+                  </div>
+
+                  {/* Compromisos o acciones de mejora */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Compromisos o acciones de mejora
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Acciones pedagógicas, plazos de nivelación y radicación de descargos..."
+                      value={editingCell.attentionCallCommitments}
+                      onChange={(e) =>
+                        setEditingCell(
+                          (p) => p && { ...p, attentionCallCommitments: e.target.value }
+                        )
+                      }
+                      className="w-full p-2 text-xs border border-rose-200 rounded-lg focus:outline-none focus:border-rose-600 bg-white resize-none font-sans"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      Garantía de debido proceso: el aprendiz puede radicar descargos o justificación dentro de los 3 días hábiles siguientes.
+                    </p>
+                  </div>
+
+                  {/* Confirmación de envío de correo electrónico institucional */}
+                  <div className="pt-2 border-t border-rose-200/80">
+                    <label className="flex items-start gap-2.5 cursor-pointer bg-white p-3 rounded-lg border border-rose-200 hover:bg-rose-50/30 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={editingCell.sendEmailNotification}
+                        onChange={(e) =>
+                          setEditingCell(
+                            (p) => p && { ...p, sendEmailNotification: e.target.checked }
+                          )
+                        }
+                        className="w-4 h-4 mt-0.5 text-[#39A900] rounded focus:ring-[#39A900] border-slate-300"
+                      />
+                      <div className="text-xs space-y-1">
+                        <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-rose-600" />
+                          Enviar notificación al correo electrónico registrado del aprendiz
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[11px] text-slate-600">Dirección destino:</span>
+                          {editingCell.apprentice.email ? (
+                            <span className="font-mono text-[11px] font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 flex items-center gap-1">
+                              <ShieldCheck className="w-3 h-3 text-[#39A900]" />
+                              {editingCell.apprentice.email}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                              ⚠️ El aprendiz no tiene correo registrado en su matrícula
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400">
+                          Se despachará mediante el servicio transaccional seguro del servidor con el formato institucional SENA.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
@@ -1750,6 +2213,15 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     <span>Guardando...</span>
+                  </>
+                ) : editingCell.generateAttentionCall ? (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>
+                      {editingCell.sendEmailNotification
+                        ? 'Guardar y Enviar Llamado'
+                        : 'Guardar y Radicar Llamado'}
+                    </span>
                   </>
                 ) : (
                   <>
@@ -2105,20 +2577,35 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 </div>
               </div>
 
-              {/* Acciones adicionales: Observación pedagógica */}
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const target = cellSelector;
-                    setCellSelector(null);
-                    handleOpenCellDetail(target.apprentice, target.date);
-                  }}
-                  className="inline-flex items-center gap-1.5 text-xs text-blue-700 hover:text-blue-900 font-semibold cursor-pointer py-1 px-2 hover:bg-blue-50 rounded-lg transition-colors"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>Agregar observación u hora de llegada...</span>
-                </button>
+              {/* Acciones adicionales: Observación pedagógica y Llamado de atención */}
+              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = cellSelector;
+                      setCellSelector(null);
+                      handleOpenCellDetail(target.apprentice, target.date);
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs text-blue-700 hover:text-blue-900 font-semibold cursor-pointer py-1 px-2 hover:bg-blue-50 rounded-lg transition-colors"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Detalle u observación...</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = cellSelector;
+                      setCellSelector(null);
+                      handleOpenCellDetail(target.apprentice, target.date, true);
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs text-rose-700 hover:text-rose-900 font-semibold cursor-pointer py-1 px-2 hover:bg-rose-50 rounded-lg transition-colors"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>Emitir llamado y notificar...</span>
+                  </button>
+                </div>
 
                 <button
                   type="button"

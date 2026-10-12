@@ -42,6 +42,7 @@ import {
   LearningOutcome,
 } from '../../types/academic';
 import { submissionService } from '../../services/submissions/submissionService';
+import { generatePlanillaPdf } from '../../services/academic/planillaPdfService';
 import { Modal } from '../ui/Modal';
 
 export interface FichaPlanillaMatrizProps {
@@ -69,7 +70,7 @@ export type CellEvidenceState =
   | 'correction' // C - Corregir
   | 'excluded'; // E - Excluido
 
-interface CellData {
+export interface CellData {
   apprentice: ApprenticeWithEnrollment;
   activity: EvidenceActivity;
   submission?: AcademicSubmission;
@@ -105,6 +106,9 @@ export const FichaPlanillaMatriz: React.FC<FichaPlanillaMatrizProps> = ({
   const [gradeInputFeedback, setGradeInputFeedback] = useState('');
   const [isSavingGrade, setIsSavingGrade] = useState(false);
   const [cellModalError, setCellModalError] = useState<string | null>(null);
+
+  // PROMPT 51: Estado para generación de informe PDF
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
   // Mapear RAPs por ID para tooltip rápido
   const rapMap = useMemo(() => {
@@ -554,74 +558,38 @@ export const FichaPlanillaMatriz: React.FC<FichaPlanillaMatrizProps> = ({
     }
   };
 
-  // Exportar planilla completa a archivo CSV estructurado
-  const handleExportCSV = () => {
+  // PROMPT 51: Descargar informe oficial de la planilla académica en formato PDF
+  const handleDownloadPdf = async () => {
+    if (isGeneratingPdf) return;
+
+    if (apprentices.length === 0) {
+      showToast?.('No hay aprendices matriculados en esta ficha para generar el informe PDF.');
+      return;
+    }
+
+    if (sortedActivities.length === 0) {
+      showToast?.('No hay actividades publicadas en esta ficha para generar el informe PDF.');
+      return;
+    }
+
+    setIsGeneratingPdf(true);
     try {
-      const headerRow = [
-        '#',
-        'Documento',
-        'Aprendiz',
-        'Correo Institucional',
-        ...sortedActivities.map((a) => `"${a.title.replace(/"/g, '""')}"`),
-        'Aprobadas',
-        'Total Evaluables',
-        '% Cumplimiento',
-        'Estado',
-      ];
-
-      const rowsData = filteredRows.map((r, idx) => {
-        const cellValues = r.cells.map((c) => {
-          if (c.state === 'approved') return 'A - Aprobado';
-          if (c.state === 'not_approved') return 'N - No aprobado';
-          if (c.state === 'correction') return 'C - Corregir';
-          if (c.state === 'excluded') return 'E - Excluido';
-          if (c.state === 'submitted' || c.state === 'under_review') return 'Entregado (Pendiente)';
-          return 'Sin entregar';
-        });
-
-        const statusLabel =
-          r.academicStatus === 'complete'
-            ? 'Completo'
-            : r.academicStatus === 'on_track'
-            ? 'Al día'
-            : r.academicStatus === 'at_risk'
-            ? 'En riesgo'
-            : 'En progreso';
-
-        return [
-          idx + 1,
-          `"${r.apprentice.documentNumber || 'N/A'}"`,
-          `"${r.apprentice.displayName.replace(/"/g, '""')}"`,
-          `"${r.apprentice.email}"`,
-          ...cellValues.map((v) => `"${v}"`),
-          r.approvedCount,
-          r.evaluableTotal,
-          `${r.progressPercent}%`,
-          `"${statusLabel}"`,
-        ].join(',');
+      const fileName = await generatePlanillaPdf({
+        ficha,
+        instructorName: instructorName || 'Instructor SENA',
+        apprentices,
+        sortedActivities,
+        submissions,
+        learnerRows,
+        globalStats,
       });
 
-      const fichaNum = ficha.number || (ficha as any).code || '';
-      const csvContent =
-        '\uFEFF' + // BOM UTF-8 para apertura directa en Microsoft Excel
-        `"SENA LEARNING HUB - PLANILLA GENERAL DE CALIFICACIONES"\n` +
-        `"Ficha:","${fichaNum} - ${ficha.name || ficha.programName || ''}"\n` +
-        `"Fecha de exportación:","${new Date().toLocaleDateString('es-CO')} ${new Date().toLocaleTimeString('es-CO')}"\n\n` +
-        [headerRow.join(','), ...rowsData].join('\n');
-
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.setAttribute('href', url);
-      link.setAttribute('download', `Planilla_Ficha_${fichaNum}_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      showToast?.('Planilla descargada exitosamente en formato CSV / Excel.');
-    } catch (err) {
-      console.error('[FichaPlanillaMatriz] Error exportando planilla:', err);
+      showToast?.(`Planilla académica descargada con éxito: ${fileName}`);
+    } catch (err: any) {
+      console.error('[FichaPlanillaMatriz] Error generando planilla PDF:', err);
+      showToast?.(err?.message || 'Error al generar el documento PDF. Por favor intenta de nuevo.');
+    } finally {
+      setIsGeneratingPdf(false);
     }
   };
 
@@ -663,12 +631,22 @@ export const FichaPlanillaMatriz: React.FC<FichaPlanillaMatrizProps> = ({
             )}
             <button
               type="button"
-              onClick={handleExportCSV}
-              className="px-3.5 py-2 text-xs font-bold text-white bg-[#00324D] hover:bg-[#002235] rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
-              title="Descargar libro de calificaciones en formato Excel/CSV"
+              disabled={isGeneratingPdf}
+              onClick={handleDownloadPdf}
+              className="px-3.5 py-2 text-xs font-bold text-white bg-[#00324D] hover:bg-[#002235] rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Descargar informe oficial de la planilla en formato PDF"
             >
-              <Download className="w-3.5 h-3.5 text-[#8CE665]" />
-              <span>Exportar Planilla (CSV)</span>
+              {isGeneratingPdf ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8CE665]" />
+                  <span>Generando PDF...</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-3.5 h-3.5 text-[#8CE665]" />
+                  <span>Descargar planilla PDF</span>
+                </>
+              )}
             </button>
           </div>
         </div>

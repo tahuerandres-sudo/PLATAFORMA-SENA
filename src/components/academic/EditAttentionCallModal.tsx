@@ -122,13 +122,13 @@ export const EditAttentionCallModal: React.FC<EditAttentionCallModalProps> = ({
   // Form fields
   const [learnerName, setLearnerName] = useState('');
   const [learnerDocument, setLearnerDocument] = useState('');
-  const [fichaNumber, setFichaNumber] = useState('3405298');
-  const [programName, setProgramName] = useState('GESTION CONTABLE Y DE INFORMACION FINANCIERA');
-  const [place, setPlace] = useState('2070D');
+  const [fichaNumber, setFichaNumber] = useState('');
+  const [programName, setProgramName] = useState('');
+  const [place, setPlace] = useState('Ambiente de Formación');
 
   // Fecha y Hora modificables
-  const [callDate, setCallDate] = useState('2026-09-28');
-  const [callTime, setCallTime] = useState('17:50');
+  const [callDate, setCallDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [callTime, setCallTime] = useState(() => new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }));
 
   // Selección múltiple de novedades (puede marcar 1, 2 o todas a la vez)
   const [selectedReasons, setSelectedReasons] = useState<string[]>(['late']);

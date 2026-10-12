@@ -49,16 +49,19 @@ import {
 import { trackingService } from '../../services/academic/trackingService';
 import { fichaService } from '../../services/academic/fichaService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
+import { attentionCallEmailClient } from '../../services/academic/attentionCallEmailClient';
 import { ApprenticeAcademicProfileModal } from '../../components/academic/ApprenticeAcademicProfileModal';
 import { EditAttentionCallModal } from '../../components/academic/EditAttentionCallModal';
 import { AttentionCallDocumentModal } from '../../components/academic/AttentionCallDocumentModal';
 import { Modal } from '../../components/ui/Modal';
 import { useAuth } from '../../hooks/useAuth';
 
+import { auth } from '../../services/firebase/config';
+
 export const InstructorAttendanceView: React.FC = () => {
-  const { userProfile } = useAuth();
-  const instructorId = userProfile?.uid || 'inst_carlos_mendoza';
-  const instructorName = userProfile?.displayName || 'ANDRES HUERTAS';
+  const { currentUser, userProfile } = useAuth();
+  const instructorId = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid || '';
+  const instructorName = userProfile?.displayName || currentUser?.displayName || 'Instructor SENA';
 
   // Fichas asignadas reales
   const [fichas, setFichas] = useState<Ficha[]>([]);
@@ -466,6 +469,35 @@ export const InstructorAttendanceView: React.FC = () => {
 
         if (res?.attentionCall) {
           setSelectedCallForDoc(res.attentionCall);
+
+          // PROMPT 50: Despachar correo electrónico formal si el aprendiz tiene correo registrado
+          if (selectedApprenticeForCall.email) {
+            attentionCallEmailClient
+              .sendEmail({
+                callId: res.attentionCall.id,
+                apprenticeName: selectedApprenticeForCall.displayName,
+                apprenticeEmail: selectedApprenticeForCall.email,
+                apprenticeDocument: selectedApprenticeForCall.documentNumber,
+                fichaNumber: activeFicha?.number || selectedApprenticeForCall.fichaNumber || selectedFicha,
+                programName: activeFicha?.programName || selectedApprenticeForCall.programName,
+                sessionDate: selectedDate,
+                noveltyType: data.type === 'TARDANZA' ? 'TARDANZA' : 'INASISTENCIA',
+                reason: data.reason || res.attentionCall.reason,
+                instructorName,
+                instructorObservations: data.description,
+                improvementCommitments: data.improvementPlan,
+              })
+              .then(async (emailRes) => {
+                if (res?.attentionCall) {
+                  await trackingService.updateAttentionCall(res.attentionCall.id, {
+                    emailStatus: emailRes.success ? 'sent' : 'failed',
+                    emailSentAt: emailRes.sentAt || new Date().toISOString(),
+                    emailError: emailRes.error,
+                  });
+                }
+              })
+              .catch((e) => console.warn('[InstructorAttendanceView] Error en despacho de email:', e));
+          }
         }
 
         if (applyRestriction) {

@@ -23,6 +23,7 @@ import { announcementService } from '../../services/academic/announcementService
 import { enrollmentService } from '../../services/academic/enrollmentService';
 import { courseService } from '../../services/academic/courseService';
 import { useAuth } from '../../hooks/useAuth';
+import { AnnouncementAttachmentsList } from '../../components/announcements/AnnouncementAttachmentsList';
 
 export const ApprenticeAnnouncementsView: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
@@ -258,6 +259,8 @@ export const ApprenticeAnnouncementsView: React.FC = () => {
                   <div className="text-xs text-slate-700 mt-2 leading-relaxed whitespace-pre-line bg-slate-50/60 p-4 rounded-xl border border-slate-100">
                     {ann.message}
                   </div>
+                  {/* PROMPT 48: Lista de Archivos Adjuntos */}
+                  <AnnouncementAttachmentsList attachments={ann.attachments} />
                 </div>
 
                 {/* Pie: Remitente y Acción */}

@@ -213,9 +213,9 @@ export const AttentionCallDocumentModal: React.FC<AttentionCallDocumentModalProp
   // Datos normalizados del llamado
   const centerName = call.centerName || 'Centro Comercio y Servicios';
   const regionalName = call.regionalName || 'Regional Tolima';
-  const fichaNumber = call.fichaNumber || call.fichaId?.replace('ficha_', '') || '3405298';
-  const programName = call.programName || call.courseName || 'GESTION CONTABLE Y DE INFORMACION FINANCIERA';
-  const place = call.place || '2070D';
+  const fichaNumber = call.fichaNumber || call.fichaId?.replace('ficha_', '') || '—';
+  const programName = call.programName || call.courseName || 'Programa de Formación SENA';
+  const place = call.place || 'Ambiente de Formación';
   const dateFormatted = formatLongDate(call.date);
   const learnerName = (call.learnerName || 'JUAN SEBASTIAN FERNANDEZ PRADA').toUpperCase();
   const learnerDocument = call.learnerDocument || '1030281506';

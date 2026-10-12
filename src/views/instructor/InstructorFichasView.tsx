@@ -112,6 +112,15 @@ import {
   getSavedFichaTab,
   InstructorFichaTab,
 } from '../../utils/navigationRoutes';
+import {
+  AnnouncementAttachmentField,
+  PendingAttachment,
+} from '../../components/announcements/AnnouncementAttachmentField';
+import { AnnouncementAttachmentsList } from '../../components/announcements/AnnouncementAttachmentsList';
+import { AnnouncementAttachment } from '../../types/academic';
+import { driveAuthService } from '../../services/drive/driveAuthService';
+import { driveService } from '../../services/drive/driveService';
+import { fileToDataUrl } from '../../services/announcements/announcementAttachmentService';
 
 interface InstructorFichasViewProps {
   onSelectFicha?: (fichaId: string, ficha?: Ficha, tab?: string) => void;
@@ -295,7 +304,17 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
   // Formulario rápido para publicar Anuncio en el Muro de la Ficha
   const [newAnnouncementTitle, setNewAnnouncementTitle] = useState('');
   const [newAnnouncementMessage, setNewAnnouncementMessage] = useState('');
+  const [pendingAnnouncementAttachments, setPendingAnnouncementAttachments] = useState<PendingAttachment[]>([]);
+  const [isDriveConnected, setIsDriveConnected] = useState(driveAuthService.isConnected());
   const [isPublishingAnnouncement, setIsPublishingAnnouncement] = useState(false);
+
+  // Escuchar estado de conexión de Google Drive
+  useEffect(() => {
+    const unsub = driveAuthService.subscribe((connected) => {
+      setIsDriveConnected(connected);
+    });
+    return () => unsub();
+  }, []);
 
   // 7. Formulario Crear Ficha (Estructura Curricular SENA: Ficha → Competencia asociada)
   const [newFichaName, setNewFichaName] = useState('');
@@ -970,15 +989,103 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
     }
   };
 
-  // Publicar Anuncio rápido en el Muro de la Ficha
+  // Publicar Anuncio rápido en el Muro de la Ficha con Archivos Adjuntos (PROMPT 48)
   const handleQuickPublishAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeFicha || !newAnnouncementTitle.trim() || !newAnnouncementMessage.trim()) return;
 
     setIsPublishingAnnouncement(true);
     try {
+      const finalAttachments: AnnouncementAttachment[] = [];
+      const announcementTitleClean = newAnnouncementTitle.trim();
+
+      // Procesar y subir cada archivo adjunto si existen
+      if (pendingAnnouncementAttachments.length > 0) {
+        for (let i = 0; i < pendingAnnouncementAttachments.length; i++) {
+          const item = pendingAnnouncementAttachments[i];
+
+          // Marcar como cargando
+          setPendingAnnouncementAttachments((prev) =>
+            prev.map((p, idx) => (idx === i ? { ...p, status: 'uploading', progress: 15 } : p))
+          );
+
+          try {
+            // Si Google Drive está conectado, subimos a la jerarquía oficial SENA
+            if (driveAuthService.isConnected()) {
+              const driveRes = await driveService.uploadAnnouncementAttachment({
+                file: item.file,
+                programName: activeFicha.programName,
+                fichaNumber: activeFicha.number,
+                announcementTitle: announcementTitleClean,
+                onProgress: (pct) => {
+                  setPendingAnnouncementAttachments((prev) =>
+                    prev.map((p, idx) => (idx === i ? { ...p, progress: pct } : p))
+                  );
+                },
+              });
+
+              finalAttachments.push({
+                id: `att_${Date.now()}_${i}`,
+                fileName: driveRes.fileName,
+                mimeType: driveRes.mimeType,
+                fileSize: driveRes.fileSize,
+                storageProvider: 'drive',
+                driveFileId: driveRes.driveFileId,
+                downloadUrl: driveRes.webContentLink || driveRes.driveUrl,
+                viewUrl: driveRes.driveUrl,
+                structuredPath: driveRes.structuredPath,
+                uploadedAt: new Date().toISOString(),
+              });
+            } else {
+              // Si Google Drive no está conectado, persistir con Data URL local seguro
+              const dataUrl = await fileToDataUrl(item.file);
+              setPendingAnnouncementAttachments((prev) =>
+                prev.map((p, idx) => (idx === i ? { ...p, progress: 100 } : p))
+              );
+
+              finalAttachments.push({
+                id: `att_${Date.now()}_${i}`,
+                fileName: item.name,
+                mimeType: item.mimeType,
+                fileSize: item.size,
+                storageProvider: 'firestore',
+                downloadUrl: dataUrl,
+                viewUrl: dataUrl,
+                structuredPath: `SENA Learning Hub / ${activeFicha.programName || 'General'} / Ficha ${activeFicha.number} / Anuncios / ${announcementTitleClean}`,
+                uploadedAt: new Date().toISOString(),
+              });
+            }
+
+            // Marcar como completado
+            setPendingAnnouncementAttachments((prev) =>
+              prev.map((p, idx) => (idx === i ? { ...p, status: 'completed', progress: 100 } : p))
+            );
+          } catch (uploadErr: any) {
+            console.warn('[InstructorFichasView] Error subiendo archivo a Drive, usando respaldo:', uploadErr);
+            // Fallback a persistencia directa para garantizar que el archivo nunca se pierda
+            const dataUrl = await fileToDataUrl(item.file);
+            finalAttachments.push({
+              id: `att_${Date.now()}_${i}`,
+              fileName: item.name,
+              mimeType: item.mimeType,
+              fileSize: item.size,
+              storageProvider: 'firestore',
+              downloadUrl: dataUrl,
+              viewUrl: dataUrl,
+              structuredPath: `SENA Learning Hub / ${activeFicha.programName || 'General'} / Ficha ${activeFicha.number} / Anuncios / ${announcementTitleClean}`,
+              uploadedAt: new Date().toISOString(),
+            });
+
+            setPendingAnnouncementAttachments((prev) =>
+              prev.map((p, idx) => (idx === i ? { ...p, status: 'completed', progress: 100 } : p))
+            );
+          }
+        }
+      }
+
+      // Guardar el anuncio completo con sus adjuntos en Firestore
       const newAnn = await announcementService.saveAnnouncement({
-        title: newAnnouncementTitle.trim(),
+        title: announcementTitleClean,
         message: newAnnouncementMessage.trim(),
         targetType: 'FICHA',
         targetIds: [activeFicha.id],
@@ -988,13 +1095,17 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
         creatorName: userProfile?.displayName || 'Instructor SENA',
         creatorEmail: userProfile?.email || 'instructor@sena.edu.co',
         status: 'PUBLISHED',
+        attachments: finalAttachments,
       });
 
       setClassAnnouncements((prev) => [newAnn, ...prev]);
       setNewAnnouncementTitle('');
       setNewAnnouncementMessage('');
-    } catch (err) {
+      setPendingAnnouncementAttachments([]);
+      showToast('¡Aviso publicado con éxito!');
+    } catch (err: any) {
       console.warn('[InstructorFichasView] Error publicando anuncio en muro:', err);
+      showToast('Error al publicar el anuncio: ' + (err?.message || 'Intenta de nuevo'));
     } finally {
       setIsPublishingAnnouncement(false);
     }
@@ -3675,7 +3786,25 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                       onChange={(e) => setNewAnnouncementMessage(e.target.value)}
                       className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-[#39A900] bg-slate-50/50 resize-none"
                     />
-                    <div className="flex justify-end">
+
+                    {/* PROMPT 48: Sección Archivos Adjuntos */}
+                    <AnnouncementAttachmentField
+                      files={pendingAnnouncementAttachments}
+                      onFilesChange={setPendingAnnouncementAttachments}
+                      disabled={isPublishingAnnouncement}
+                      isDriveConnected={isDriveConnected}
+                      onConnectDrive={async () => {
+                        try {
+                          await driveAuthService.connectDrive();
+                          setIsDriveConnected(true);
+                          showToast('Google Drive conectado exitosamente.');
+                        } catch (err: any) {
+                          showToast(err.message || 'Error conectando Google Drive');
+                        }
+                      }}
+                    />
+
+                    <div className="flex justify-end pt-1">
                       <button
                         type="submit"
                         disabled={
@@ -3713,6 +3842,9 @@ export const InstructorFichasView: React.FC<InstructorFichasViewProps> = ({
                           </div>
                           <h4 className="text-sm font-bold text-slate-900">{ann.title}</h4>
                           <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">{ann.message}</p>
+
+                          {/* PROMPT 48: Lista de Archivos Adjuntos */}
+                          <AnnouncementAttachmentsList attachments={ann.attachments} />
                         </div>
                       ))}
                     </div>

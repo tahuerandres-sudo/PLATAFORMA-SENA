@@ -45,11 +45,12 @@ import { AttentionCallDocumentModal } from '../../components/academic/AttentionC
 import { EditAttentionCallModal } from '../../components/academic/EditAttentionCallModal';
 import { Modal } from '../../components/ui/Modal';
 import { useAuth } from '../../hooks/useAuth';
+import { auth } from '../../services/firebase/config';
 
 export const InstructorAttentionCallsView: React.FC = () => {
-  const { userProfile } = useAuth();
-  const instructorId = userProfile?.uid || 'inst_carlos_mendoza';
-  const instructorName = userProfile?.displayName || 'ANDRES HUERTAS';
+  const { currentUser, userProfile } = useAuth();
+  const instructorId = auth.currentUser?.uid || currentUser?.uid || userProfile?.uid || '';
+  const instructorName = userProfile?.displayName || currentUser?.displayName || 'Instructor SENA';
 
   // Pestaña activa
   const [activeTab, setActiveTab] = useState<'calls' | 'restrictions' | 'justifications'>('calls');
@@ -57,6 +58,7 @@ export const InstructorAttentionCallsView: React.FC = () => {
   // Estados de fichas asignadas y aprendices reales
   const [fichas, setFichas] = useState<Ficha[]>([]);
   const [fichasLoading, setFichasLoading] = useState(true);
+  const [fichasError, setFichasError] = useState<string | null>(null);
   const [selectedFicha, setSelectedFicha] = useState<string>('');
   const [apprentices, setApprentices] = useState<ApprenticeWithEnrollment[]>([]);
 
@@ -103,31 +105,47 @@ export const InstructorAttentionCallsView: React.FC = () => {
   const activeFicha = fichas.find((f) => f.id === selectedFicha);
 
   // Cargar fichas asignadas al instructor
-  useEffect(() => {
-    let isMounted = true;
-    const fetchFichas = async () => {
-      setFichasLoading(true);
-      try {
-        const res = await fichaService.getFichas(instructorId);
-        if (isMounted) {
-          const list = res.data || [];
-          setFichas(list);
-          if (list.length > 0) {
-            setSelectedFicha(list[0].id);
-          } else {
-            setSelectedFicha('');
-          }
-        }
-      } catch (err) {
-        console.error('[InstructorAttentionCallsView] Error cargando fichas:', err);
-      } finally {
-        if (isMounted) setFichasLoading(false);
+  const fetchFichas = async () => {
+    if (!instructorId) {
+      setFichasLoading(false);
+      return;
+    }
+    setFichasLoading(true);
+    setFichasError(null);
+    try {
+      const res = await fichaService.getFichas(instructorId);
+      const rawList = res.data || [];
+
+      // PROMPT 49: Filtrar estrictamente solo aquellas asignadas formalmente al instructor autenticado
+      const authorizedFichas = rawList.filter((f) => {
+        if (!f || f.status === 'archived' || (f.status as any) === 'deleted') return false;
+        const ids = Array.isArray(f.instructorIds) ? f.instructorIds : [];
+        return (
+          ids.includes(instructorId) ||
+          f.createdBy === instructorId ||
+          (f as any).instructorId === instructorId
+        );
+      });
+
+      setFichas(authorizedFichas);
+
+      if (authorizedFichas.length > 0) {
+        setSelectedFicha((prev) =>
+          prev && authorizedFichas.some((f) => f.id === prev) ? prev : authorizedFichas[0].id
+        );
+      } else {
+        setSelectedFicha('');
       }
-    };
+    } catch (err: any) {
+      console.error('[InstructorAttentionCallsView] Error cargando fichas:', err);
+      setFichasError(err?.message || 'Error al consultar las fichas de formación asignadas.');
+    } finally {
+      setFichasLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchFichas();
-    return () => {
-      isMounted = false;
-    };
   }, [instructorId]);
 
   // Cargar datos reales de la ficha seleccionada
@@ -434,7 +452,15 @@ export const InstructorAttentionCallsView: React.FC = () => {
           {activeTab === 'calls' && (
             <button
               onClick={handleOpenNewCallModal}
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              disabled={fichasLoading || !selectedFicha || apprentices.length === 0}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                !selectedFicha
+                  ? 'Selecciona una ficha asignada para emitir llamados'
+                  : apprentices.length === 0
+                  ? 'No hay aprendices matriculados en esta ficha'
+                  : 'Emitir Llamado de Atención'
+              }
             >
               <Plus className="w-4 h-4" />
               + Emitir Llamado
@@ -444,7 +470,15 @@ export const InstructorAttentionCallsView: React.FC = () => {
           {activeTab === 'restrictions' && (
             <button
               onClick={() => setCreateRestrModalOpen(true)}
-              className="px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              disabled={fichasLoading || !selectedFicha || apprentices.length === 0}
+              className="px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                !selectedFicha
+                  ? 'Selecciona una ficha asignada para aplicar restricciones'
+                  : apprentices.length === 0
+                  ? 'No hay aprendices matriculados en esta ficha'
+                  : 'Aplicar Restricción Manual'
+              }
             >
               <ShieldAlert className="w-4 h-4" />
               + Aplicar Restricción
@@ -473,33 +507,68 @@ export const InstructorAttentionCallsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Selector de Ficha Asignada */}
-      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-[#39A900]" />
+      {/* Selector de Ficha Asignada (PROMPT 49) */}
+      <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <Filter className="w-4 h-4 text-[#39A900] shrink-0" />
           <span className="font-bold text-slate-700">Ficha Asignada:</span>
           {fichasLoading ? (
-            <span className="text-slate-400">Cargando fichas asignadas...</span>
+            <span className="text-slate-500 italic bg-slate-50 px-2.5 py-1 rounded border border-slate-200 flex items-center gap-1.5">
+              <RefreshCw className="w-3 h-3 animate-spin text-[#39A900]" />
+              Cargando fichas asignadas...
+            </span>
+          ) : fichasError ? (
+            <div className="flex items-center gap-2">
+              <span className="text-rose-700 font-semibold bg-rose-50 px-2.5 py-1 rounded border border-rose-200">
+                {fichasError}
+              </span>
+              <button
+                onClick={fetchFichas}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold cursor-pointer"
+              >
+                Reintentar
+              </button>
+            </div>
           ) : fichas.length === 0 ? (
-            <span className="text-amber-700 font-semibold">Sin fichas asignadas a tu cuenta</span>
+            <div className="flex items-center gap-2">
+              <span className="text-amber-800 font-semibold bg-amber-50 px-2.5 py-1 rounded border border-amber-200">
+                No tienes fichas asignadas
+              </span>
+              <button
+                onClick={fetchFichas}
+                className="px-2 py-0.5 text-xs text-slate-500 hover:text-slate-800 underline cursor-pointer"
+              >
+                Actualizar
+              </button>
+            </div>
           ) : (
             <select
               value={selectedFicha}
               onChange={(e) => setSelectedFicha(e.target.value)}
-              className="px-3 py-1.5 border border-slate-200 rounded-lg bg-white font-bold text-slate-800 focus:outline-none focus:border-[#39A900]"
+              className="px-3 py-1.5 border border-slate-200 rounded-lg bg-white font-bold text-slate-800 focus:outline-none focus:border-[#39A900] max-w-md truncate shadow-2xs"
             >
-              {fichas.map((f) => (
-                <option key={f.id} value={f.id}>
-                  Ficha #{f.number} · {f.programName || 'Programa SENA'}
-                </option>
-              ))}
+              {fichas.map((f) => {
+                const fichaDisplayLabel = `Ficha #${f.number} — ${f.name || f.programName || 'Ficha de Formación'}`;
+                return (
+                  <option key={f.id} value={f.id}>
+                    {fichaDisplayLabel}
+                  </option>
+                );
+              })}
             </select>
           )}
         </div>
         {activeFicha && (
-          <span className="text-slate-500 font-medium">
-            Aprendices matriculados: <strong>{apprentices.length}</strong>
-          </span>
+          <div className="flex items-center gap-3 text-slate-500 font-medium">
+            {activeFicha.programName && (
+              <span className="hidden md:inline text-[11px] text-slate-400 truncate max-w-xs">
+                Programa: {activeFicha.programName}
+              </span>
+            )}
+            <span>
+              Aprendices matriculados: <strong className="text-slate-800">{apprentices.length}</strong>
+            </span>
+          </div>
         )}
       </div>
 
@@ -648,10 +717,10 @@ export const InstructorAttentionCallsView: React.FC = () => {
                           {/* Ficha / Programa */}
                           <td className="p-3 text-[11px] whitespace-nowrap">
                             <span className="font-bold text-[#00324D] block">
-                              Ficha #{c.fichaNumber || '3409626'}
+                              Ficha #{c.fichaNumber || activeFicha?.number || '—'}
                             </span>
                             <span className="text-[10px] text-slate-500 block truncate max-w-44">
-                              {c.programName || 'Gestión Contable'}
+                              {c.programName || activeFicha?.programName || 'Ficha de Formación'}
                             </span>
                           </td>
 
@@ -799,7 +868,7 @@ export const InstructorAttentionCallsView: React.FC = () => {
                         <div>
                           <strong className="text-slate-800 block">{apprentice.displayName}</strong>
                           <span className="text-[10px] text-slate-400 font-mono">
-                            CC {apprentice.documentNumber} · Ficha 3409626
+                            CC {apprentice.documentNumber} · Ficha #{activeFicha?.number || apprentice.fichaNumber || r.fichaId?.replace('ficha_', '') || '—'}
                           </span>
                         </div>
                       </div>

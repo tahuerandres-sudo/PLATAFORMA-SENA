@@ -29,6 +29,7 @@ import {
   AnnouncementPriority,
   AnnouncementStatus,
   AnnouncementTargetType,
+  AnnouncementAttachment,
   Ficha,
   Course,
   TrainingProgram,
@@ -40,6 +41,14 @@ import { programService } from '../../services/academic/programService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
 import { useAuth } from '../../hooks/useAuth';
 import { Modal } from '../../components/ui/Modal';
+import {
+  AnnouncementAttachmentField,
+  PendingAttachment,
+} from '../../components/announcements/AnnouncementAttachmentField';
+import { AnnouncementAttachmentsList } from '../../components/announcements/AnnouncementAttachmentsList';
+import { driveAuthService } from '../../services/drive/driveAuthService';
+import { driveService } from '../../services/drive/driveService';
+import { fileToDataUrl } from '../../services/announcements/announcementAttachmentService';
 
 export const InstructorAnnouncementsView: React.FC = () => {
   const { currentUser, userProfile } = useAuth();
@@ -69,8 +78,16 @@ export const InstructorAnnouncementsView: React.FC = () => {
   const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedCourseId, setSelectedCourseId] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [existingAttachments, setExistingAttachments] = useState<AnnouncementAttachment[]>([]);
+  const [isDriveConnected, setIsDriveConnected] = useState(driveAuthService.isConnected());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = driveAuthService.subscribe((conn) => setIsDriveConnected(conn));
+    return () => unsub();
+  }, []);
 
   // 1. Cargar datos reales
   const loadData = async () => {
@@ -133,6 +150,8 @@ export const InstructorAnnouncementsView: React.FC = () => {
     setMessage('');
     setPriority('NORMAL');
     setTargetType('FICHA');
+    setPendingAttachments([]);
+    setExistingAttachments([]);
     if (fichas.length > 0) setSelectedFichaId(fichas[0].id);
     setIsModalOpen(true);
   };
@@ -144,6 +163,8 @@ export const InstructorAnnouncementsView: React.FC = () => {
     setMessage(ann.message);
     setPriority(ann.priority);
     setTargetType(ann.targetType);
+    setPendingAttachments([]);
+    setExistingAttachments(ann.attachments || []);
     if (ann.fichaIds?.length) setSelectedFichaId(ann.fichaIds[0]);
     else if (ann.targetIds.length) setSelectedFichaId(ann.targetIds[0]);
     if (ann.programIds?.length) setSelectedProgramId(ann.programIds[0]);
@@ -183,9 +204,91 @@ export const InstructorAnnouncementsView: React.FC = () => {
         fichaIds = fichas.map((f) => f.id);
       }
 
+      // Procesar adjuntos pendientes
+      const finalAttachments: AnnouncementAttachment[] = [...existingAttachments];
+      const titleClean = title.trim();
+      const currentFicha = fichas.find((f) => f.id === selectedFichaId);
+
+      if (pendingAttachments.length > 0) {
+        for (let i = 0; i < pendingAttachments.length; i++) {
+          const item = pendingAttachments[i];
+          setPendingAttachments((prev) =>
+            prev.map((p, idx) => (idx === i ? { ...p, status: 'uploading', progress: 20 } : p))
+          );
+
+          try {
+            if (driveAuthService.isConnected()) {
+              const driveRes = await driveService.uploadAnnouncementAttachment({
+                file: item.file,
+                programName: currentFicha?.programName,
+                fichaNumber: currentFicha?.number,
+                announcementTitle: titleClean,
+                onProgress: (pct) => {
+                  setPendingAttachments((prev) =>
+                    prev.map((p, idx) => (idx === i ? { ...p, progress: pct } : p))
+                  );
+                },
+              });
+
+              finalAttachments.push({
+                id: `att_${Date.now()}_${i}`,
+                fileName: driveRes.fileName,
+                mimeType: driveRes.mimeType,
+                fileSize: driveRes.fileSize,
+                storageProvider: 'drive',
+                driveFileId: driveRes.driveFileId,
+                downloadUrl: driveRes.webContentLink || driveRes.driveUrl,
+                viewUrl: driveRes.driveUrl,
+                structuredPath: driveRes.structuredPath,
+                uploadedAt: new Date().toISOString(),
+              });
+            } else {
+              const dataUrl = await fileToDataUrl(item.file);
+              setPendingAttachments((prev) =>
+                prev.map((p, idx) => (idx === i ? { ...p, progress: 100 } : p))
+              );
+
+              finalAttachments.push({
+                id: `att_${Date.now()}_${i}`,
+                fileName: item.name,
+                mimeType: item.mimeType,
+                fileSize: item.size,
+                storageProvider: 'firestore',
+                downloadUrl: dataUrl,
+                viewUrl: dataUrl,
+                structuredPath: `SENA Learning Hub / ${currentFicha?.programName || 'General'} / Ficha ${currentFicha?.number || 'General'} / Anuncios / ${titleClean}`,
+                uploadedAt: new Date().toISOString(),
+              });
+            }
+
+            setPendingAttachments((prev) =>
+              prev.map((p, idx) => (idx === i ? { ...p, status: 'completed', progress: 100 } : p))
+            );
+          } catch (uploadErr) {
+            console.warn('[InstructorAnnouncementsView] Error en Drive, fallback a almacenamiento seguro:', uploadErr);
+            const dataUrl = await fileToDataUrl(item.file);
+            finalAttachments.push({
+              id: `att_${Date.now()}_${i}`,
+              fileName: item.name,
+              mimeType: item.mimeType,
+              fileSize: item.size,
+              storageProvider: 'firestore',
+              downloadUrl: dataUrl,
+              viewUrl: dataUrl,
+              structuredPath: `SENA Learning Hub / ${currentFicha?.programName || 'General'} / Ficha ${currentFicha?.number || 'General'} / Anuncios / ${titleClean}`,
+              uploadedAt: new Date().toISOString(),
+            });
+
+            setPendingAttachments((prev) =>
+              prev.map((p, idx) => (idx === i ? { ...p, status: 'completed', progress: 100 } : p))
+            );
+          }
+        }
+      }
+
       const saved = await announcementService.saveAnnouncement({
         id: editingId || undefined,
-        title: title.trim(),
+        title: titleClean,
         message: message.trim(),
         createdBy: instructorUid,
         creatorName: instructorName,
@@ -197,6 +300,7 @@ export const InstructorAnnouncementsView: React.FC = () => {
         courseIds,
         priority,
         status,
+        attachments: finalAttachments,
       });
 
       setAnnouncements((prev) => {
@@ -484,6 +588,8 @@ export const InstructorAnnouncementsView: React.FC = () => {
                   <p className="text-xs text-slate-600 mt-1 leading-relaxed whitespace-pre-line">
                     {ann.message}
                   </p>
+                  {/* PROMPT 48: Lista de Archivos Adjuntos */}
+                  <AnnouncementAttachmentsList attachments={ann.attachments} />
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
@@ -706,6 +812,23 @@ export const InstructorAnnouncementsView: React.FC = () => {
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-[#39A900]"
             />
           </div>
+
+          {/* PROMPT 48: Sección de Archivos Adjuntos */}
+          <AnnouncementAttachmentField
+            files={pendingAttachments}
+            onFilesChange={setPendingAttachments}
+            disabled={isSubmitting}
+            isDriveConnected={isDriveConnected}
+            onConnectDrive={async () => {
+              try {
+                await driveAuthService.connectDrive();
+                setIsDriveConnected(true);
+                setFeedbackMsg('Google Drive conectado exitosamente.');
+              } catch (err: any) {
+                setFeedbackMsg(err.message || 'Error conectando Google Drive');
+              }
+            }}
+          />
         </form>
       </Modal>
     </div>
