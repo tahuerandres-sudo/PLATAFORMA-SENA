@@ -294,18 +294,27 @@ service cloud.firestore {
       );
     }
 
-    // Llamados de Atención (PROMPT 10: Aprendiz lee los suyos, instructor gestiona su ficha)
+    // Llamados de Atención (PROMPT 10 & 53: Aprendiz lee y registra observaciones en los suyos, instructor gestiona su ficha)
     match /attentionCalls/{callId} {
       allow read: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         resource.data.learnerId == request.auth.uid ||
         isFichaInstructor(resource.data.fichaId) ||
-        (isInstructor() && resource.data.createdBy == request.auth.uid)
+        (isInstructor() && resource.data.createdBy == request.auth.uid) ||
+        isInstructor()
       );
-      allow create: if isFichaInstructor(request.resource.data.fichaId) ||
-                       (isInstructor() && request.resource.data.createdBy == request.auth.uid);
-      allow update: if isFichaInstructor(resource.data.fichaId) ||
-                       (isInstructor() && resource.data.createdBy == request.auth.uid);
+      allow create: if isAuthenticated() && (
+        isFichaInstructor(request.resource.data.fichaId) ||
+        (isInstructor() && request.resource.data.createdBy == request.auth.uid) ||
+        isInstructor()
+      );
+      allow update: if isAuthenticated() && (
+        isFichaInstructor(resource.data.fichaId) ||
+        (isInstructor() && resource.data.createdBy == request.auth.uid) ||
+        isInstructor() ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.learnerId == request.auth.uid
+      );
       allow delete: if false;
     }
 

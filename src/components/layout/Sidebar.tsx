@@ -166,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'submissions', label: 'Mis evidencias', icon: FolderArchive },
     { id: 'grades', label: 'Mis calificaciones', icon: Award },
     { id: 'announcements', label: 'Anuncios', icon: Megaphone },
-    { id: 'attendance_tracking', label: 'Asistencia y Justificaciones', icon: CalendarCheck },
+    { id: 'attendance_tracking', label: 'Asistencia y Llamados', icon: CalendarCheck },
     { id: 'progress', label: 'Mi progreso', icon: BarChart3 },
     { id: 'achievements', label: 'Mis logros', icon: Trophy },
     { id: 'ranking', label: 'Ranking', icon: Medal },

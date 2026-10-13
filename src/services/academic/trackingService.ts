@@ -524,12 +524,11 @@ export const trackingService = {
 
     // Notificar al aprendiz
     try {
-      await notificationService.sendNotification({
-        recipientUserId: finalCall.userId,
-        title: `Llamado de atención: ${finalCall.type}`,
-        description: `${finalCall.reason}. Consulta los detalles y radica tu justificación.`,
-        type: 'attention_call',
-        relatedId: finalCall.id,
+      await notificationService.notifyAttentionCall({
+        callId: finalCall.id,
+        userId: finalCall.userId,
+        callType: finalCall.type,
+        reason: finalCall.reason,
       });
     } catch (err) {
       console.warn('[trackingService] Aviso creando notificación:', err);

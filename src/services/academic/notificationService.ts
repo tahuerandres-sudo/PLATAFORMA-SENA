@@ -878,12 +878,13 @@ export const notificationService = {
     await this.sendNotification({
       id: `notif_${userId}_ATTENTION_CALL_${callId}`,
       userId,
-      title: `Llamado de atención: ${callType}`,
-      message: `${reason}. Consulta los detalles y radica tus descargos o justificación en caso de ser necesario.`,
+      title: `Nuevo llamado de atención: ${callType}`,
+      message: 'Se ha registrado un nuevo llamado de atención en tu expediente académico. Puedes consultarlo y descargarlo desde tu perfil.',
+      description: 'Se ha registrado un nuevo llamado de atención en tu expediente académico. Puedes consultarlo y descargarlo desde tu perfil.',
       type: 'ATTENTION_CALL',
       relatedId: callId,
       relatedType: 'attention_call',
-      metadata: { callType },
+      metadata: { callType, reason, callId },
     });
   },
 

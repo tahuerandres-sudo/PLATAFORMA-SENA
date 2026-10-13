@@ -21,8 +21,11 @@ import {
   Info,
   Calendar,
   Send,
+  Eye,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { downloadAttentionCallPdf } from '../../utils/attentionCallPdfDownloader';
 import {
   AttendanceRecord,
   AttentionCall,
@@ -33,7 +36,15 @@ import { trackingService } from '../../services/academic/trackingService';
 import { AttentionCallDocumentModal } from '../../components/academic/AttentionCallDocumentModal';
 import { Modal } from '../../components/ui/Modal';
 
-export const ApprenticeTrackingView: React.FC = () => {
+export interface ApprenticeTrackingViewProps {
+  initialCallId?: string;
+  initialTab?: 'attendance' | 'calls' | 'justifications';
+}
+
+export const ApprenticeTrackingView: React.FC<ApprenticeTrackingViewProps> = ({
+  initialCallId,
+  initialTab,
+}) => {
   const { userProfile, currentUser } = useAuth();
   const learnerId = userProfile?.uid || currentUser?.uid || 'appr_juan_perez';
   const learnerName = userProfile?.displayName || 'Juan David Pérez Gómez';
@@ -41,7 +52,9 @@ export const ApprenticeTrackingView: React.FC = () => {
   const fichaId = userProfile?.fichaId || 'ficha_3409626';
 
   // Pestañas
-  const [activeTab, setActiveTab] = useState<'attendance' | 'calls' | 'justifications'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'calls' | 'justifications'>(
+    initialCallId ? 'calls' : (initialTab || 'attendance')
+  );
 
   // Datos
   const [attendances, setAttendances] = useState<AttendanceRecord[]>([]);
@@ -74,6 +87,14 @@ export const ApprenticeTrackingView: React.FC = () => {
       setCalls(fullRecord.attentionCalls);
       setRestrictions(fullRecord.restrictions);
       setJustifications(fullRecord.justifications);
+
+      if (initialCallId) {
+        const found = fullRecord.attentionCalls.find((c) => c.id === initialCallId);
+        if (found) {
+          setSelectedCallForDoc(found);
+          setDocModalOpen(true);
+        }
+      }
     } catch (err) {
       console.error('[ApprenticeTrackingView] Error cargando expediente:', err);
     } finally {
@@ -84,6 +105,17 @@ export const ApprenticeTrackingView: React.FC = () => {
   useEffect(() => {
     loadData();
   }, [learnerId]);
+
+  useEffect(() => {
+    if (initialCallId) {
+      setActiveTab('calls');
+      const found = calls.find((c) => c.id === initialCallId);
+      if (found) {
+        setSelectedCallForDoc(found);
+        setDocModalOpen(true);
+      }
+    }
+  }, [initialCallId, calls]);
 
   // Radicar Justificación
   const handleSubmitJustification = async (e: React.FormEvent) => {
@@ -300,7 +332,7 @@ export const ApprenticeTrackingView: React.FC = () => {
           }`}
         >
           <AlertTriangle className="w-4 h-4 text-rose-600" />
-          Llamados de Atención ({calls.length})
+          Mis llamados de atención ({calls.length})
         </button>
 
         <button
@@ -402,14 +434,24 @@ export const ApprenticeTrackingView: React.FC = () => {
       )}
 
       {/* ========================================================
-          PESTAÑA 2: LLAMADOS DE ATENCIÓN
+          PESTAÑA 2: MIS LLAMADOS DE ATENCIÓN (PROMPT 53)
          ======================================================== */}
       {activeTab === 'calls' && (
         <div className="space-y-4">
+          <div className="flex items-center justify-between pb-1">
+            <h2 className="text-sm font-bold text-[#00324D] flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600" />
+              Mis llamados de atención
+            </h2>
+            <span className="text-[11px] text-slate-500">
+              Registros oficiales de acompañamiento académico y debido proceso
+            </span>
+          </div>
+
           {calls.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500 shadow-xs">
               <CheckCircle2 className="w-10 h-10 text-[#39A900] mx-auto mb-2" />
-              <h3 className="text-sm font-bold text-slate-800">¡Felicidades! No tienes llamados de atención</h3>
+              <h3 className="text-sm font-bold text-slate-800">No tienes llamados de atención registrados</h3>
               <p className="text-xs text-slate-500 mt-1">
                 Tu historial disciplinario y de asistencia se encuentra al día.
               </p>
@@ -445,27 +487,57 @@ export const ApprenticeTrackingView: React.FC = () => {
                     </p>
                   </div>
 
-                  <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1">
-                    <span>Fecha: <strong>{c.date}</strong></span>
-                    <span>Instructor: <strong>{c.instructorName || 'Carlos Mendoza'}</strong></span>
+                  <div className="text-[10px] text-slate-500 flex flex-col gap-1 pt-1 font-sans">
+                    <div className="flex items-center justify-between">
+                      <span>Fecha: <strong className="font-mono text-slate-800">{c.date}</strong></span>
+                      <span>Ficha: <strong className="text-[#00324D]">#{c.fichaNumber || fichaId.replace('ficha_', '')}</strong></span>
+                    </div>
+                    <div>
+                      Instructor: <strong>{c.instructorName || 'Instructor SENA'}</strong>
+                    </div>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => {
-                        setSelectedCallForDoc(c);
-                        setDocModalOpen(true);
-                      }}
-                      className="px-3 py-1.5 border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-500" />
-                      Ver Acta Imprimible / PDF
-                    </button>
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCallForDoc(c);
+                          setDocModalOpen(true);
+                        }}
+                        className="px-2.5 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                        title="Ver llamado oficial"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-slate-600" />
+                        Ver llamado
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await downloadAttentionCallPdf(c);
+                            setSuccessToast('Documento PDF descargado correctamente.');
+                            setTimeout(() => setSuccessToast(null), 4000);
+                          } catch (e) {
+                            console.error('Error descargando PDF:', e);
+                            setSelectedCallForDoc(c);
+                            setDocModalOpen(true);
+                          }
+                        }}
+                        className="px-2.5 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                        title="Descargar documento PDF oficial"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#8CE665]" />
+                        Descargar PDF
+                      </button>
+                    </div>
 
                     {c.status !== 'JUSTIFICADO' && (
                       <button
+                        type="button"
                         onClick={() => openJustifyForCall(c)}
-                        className="px-3 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        className="px-3 py-1.5 bg-[#39A900] hover:bg-[#2E8500] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
                       >
                         <FileCheck className="w-3.5 h-3.5" />
                         Radicar Justificación

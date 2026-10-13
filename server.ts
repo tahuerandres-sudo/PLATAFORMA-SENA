@@ -131,9 +131,7 @@ app.get('/api/gemini/status', (_req, res) => {
   });
 });
 
-// PROMPT 50: Endpoint seguro para enviar correo electrónico de llamado de atención al aprendiz
-import { handleSendAttentionCallEmail } from './src/server/attentionCallEmailService.ts';
-app.post('/api/attention-calls/send-email', handleSendAttentionCallEmail);
+// PROMPT 53: Los llamados de atención se radican y descargan directamente sin envío de correo electrónico
 
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';

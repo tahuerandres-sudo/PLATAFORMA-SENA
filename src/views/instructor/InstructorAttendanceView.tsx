@@ -49,7 +49,6 @@ import {
 import { trackingService } from '../../services/academic/trackingService';
 import { fichaService } from '../../services/academic/fichaService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
-import { attentionCallEmailClient } from '../../services/academic/attentionCallEmailClient';
 import { ApprenticeAcademicProfileModal } from '../../components/academic/ApprenticeAcademicProfileModal';
 import { EditAttentionCallModal } from '../../components/academic/EditAttentionCallModal';
 import { AttentionCallDocumentModal } from '../../components/academic/AttentionCallDocumentModal';
@@ -469,35 +468,11 @@ export const InstructorAttendanceView: React.FC = () => {
 
         if (res?.attentionCall) {
           setSelectedCallForDoc(res.attentionCall);
-
-          // PROMPT 50: Despachar correo electrónico formal si el aprendiz tiene correo registrado
-          if (selectedApprenticeForCall.email) {
-            attentionCallEmailClient
-              .sendEmail({
-                callId: res.attentionCall.id,
-                apprenticeName: selectedApprenticeForCall.displayName,
-                apprenticeEmail: selectedApprenticeForCall.email,
-                apprenticeDocument: selectedApprenticeForCall.documentNumber,
-                fichaNumber: activeFicha?.number || selectedApprenticeForCall.fichaNumber || selectedFicha,
-                programName: activeFicha?.programName || selectedApprenticeForCall.programName,
-                sessionDate: selectedDate,
-                noveltyType: data.type === 'TARDANZA' ? 'TARDANZA' : 'INASISTENCIA',
-                reason: data.reason || res.attentionCall.reason,
-                instructorName,
-                instructorObservations: data.description,
-                improvementCommitments: data.improvementPlan,
-              })
-              .then(async (emailRes) => {
-                if (res?.attentionCall) {
-                  await trackingService.updateAttentionCall(res.attentionCall.id, {
-                    emailStatus: emailRes.success ? 'sent' : 'failed',
-                    emailSentAt: emailRes.sentAt || new Date().toISOString(),
-                    emailError: emailRes.error,
-                  });
-                }
-              })
-              .catch((e) => console.warn('[InstructorAttendanceView] Error en despacho de email:', e));
-          }
+          setActionAlert({
+            type: 'success',
+            message: `Llamado de atención radicado en Firestore. El aprendiz recibió una notificación interna en su perfil para consultar y descargar el documento PDF.`,
+          });
+          setTimeout(() => setActionAlert(null), 5000);
         }
 
         if (applyRestriction) {

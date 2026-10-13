@@ -598,7 +598,9 @@ function AppContent() {
               )}
               {activeView === 'submissions' && <ApprenticeSubmissionsView />}
               {activeView === 'grades' && <ApprenticeGradesView />}
-              {activeView === 'attendance_tracking' && <ApprenticeTrackingView />}
+              {activeView === 'attendance_tracking' && (
+                <ApprenticeTrackingView initialCallId={selectedRelatedId || undefined} />
+              )}
               {activeView === 'progress' && <ApprenticeProgressView />}
               {activeView === 'achievements' && <ApprenticeAchievementsView />}
               {activeView === 'ranking' && <ApprenticeRankingView />}

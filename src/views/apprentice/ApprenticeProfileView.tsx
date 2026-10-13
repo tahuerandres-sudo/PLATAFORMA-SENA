@@ -42,12 +42,16 @@ import {
   Users,
   GraduationCap,
   Info,
+  Eye,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
 import { academicRecordService } from '../../services/academic/academicRecordService';
-import { ApprenticeAcademicExpediente } from '../../types/academic';
+import { AttentionCall, ApprenticeAcademicExpediente } from '../../types/academic';
+import { AttentionCallDocumentModal } from '../../components/academic/AttentionCallDocumentModal';
+import { downloadAttentionCallPdf } from '../../utils/attentionCallPdfDownloader';
 
 export const ApprenticeProfileView: React.FC = () => {
   const { userProfile, currentUser, updateProfile } = useAuth();
@@ -71,6 +75,12 @@ export const ApprenticeProfileView: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // Modal de documento de llamado de atención
+  const [docModalOpen, setDocModalOpen] = useState(false);
+  const [selectedCallForDoc, setSelectedCallForDoc] = useState<AttentionCall | null>(null);
+  const [downloadingCallId, setDownloadingCallId] = useState<string | null>(null);
+  const [downloadToast, setDownloadToast] = useState<string | null>(null);
 
   // Filtro de evidencias
   const [evidenceFilter, setEvidenceFilter] = useState<
@@ -1067,29 +1077,86 @@ export const ApprenticeProfileView: React.FC = () => {
                 )}
               </div>
 
-              {/* Llamados de Atención */}
+              {/* Mis llamados de atención (PROMPT 53) */}
               <div className="space-y-3">
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Llamados de Atención Institucionales ({attentionCalls.length})
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                    Mis llamados de atención ({attentionCalls.length})
+                  </h3>
+                  <span className="text-[10px] text-slate-400">Expediente oficial SENA</span>
+                </div>
+
                 {attentionCalls.length === 0 ? (
                   <p className="text-xs text-slate-500 italic p-3 bg-emerald-50/50 rounded-lg border border-emerald-100 text-emerald-800">
                     ✓ Sin llamados de atención en su expediente.
                   </p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     {attentionCalls.map((call) => (
                       <div
                         key={call.id}
-                        className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-1 text-xs text-rose-900"
+                        className="p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-2 text-xs text-rose-900"
                       >
                         <div className="flex items-center justify-between">
-                          <strong>{(call as any).title || call.reason || call.type}</strong>
-                          <span className="text-[10px] font-bold bg-rose-200 text-rose-800 px-2 py-0.5 rounded">
+                          <span className="font-bold text-slate-900">
+                            {call.reason || (call as any).title || call.type}
+                          </span>
+                          <span className="text-[10px] font-bold bg-rose-200 text-rose-800 px-2 py-0.5 rounded-full uppercase">
                             {call.status}
                           </span>
                         </div>
-                        <p className="text-[11px] text-rose-700">{call.reason || call.description}</p>
+
+                        {call.description && (
+                          <p className="text-[11px] text-slate-600 bg-white/80 p-2 rounded border border-rose-100 whitespace-pre-wrap">
+                            {call.description}
+                          </p>
+                        )}
+
+                        <div className="flex items-center justify-between text-[10px] text-slate-500 font-sans">
+                          <span>Fecha: <strong className="text-slate-800">{call.date || '—'}</strong></span>
+                          <span>Ficha: <strong>#{call.fichaNumber || academicInfo.fichaNumber}</strong></span>
+                          <span>Instructor: <strong>{call.instructorName || 'Instructor SENA'}</strong></span>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-rose-200/60">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCallForDoc(call);
+                              setDocModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                            title="Ver llamado oficial"
+                          >
+                            <Eye className="w-3 h-3 text-slate-600" />
+                            Ver llamado
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setDownloadingCallId(call.id);
+                              try {
+                                await downloadAttentionCallPdf(call);
+                                setDownloadToast('Documento PDF descargado correctamente.');
+                                setTimeout(() => setDownloadToast(null), 4000);
+                              } catch (e) {
+                                console.error('Error descargando PDF:', e);
+                                setSelectedCallForDoc(call);
+                                setDocModalOpen(true);
+                              } finally {
+                                setDownloadingCallId(null);
+                              }
+                            }}
+                            disabled={downloadingCallId === call.id}
+                            className="px-3 py-1 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs disabled:opacity-50"
+                            title="Descargar documento PDF"
+                          >
+                            <Download className={`w-3 h-3 text-[#8CE665] ${downloadingCallId === call.id ? 'animate-bounce' : ''}`} />
+                            {downloadingCallId === call.id ? 'Descargando...' : 'Descargar PDF'}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

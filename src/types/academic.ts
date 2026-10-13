@@ -550,10 +550,13 @@ export interface AttentionCall {
   callLevel?: 'PRIMER_LLAMADO' | 'SEGUNDO_LLAMADO' | 'TERCER_LLAMADO';
   apprenticeObservations?: string;
 
-  // PROMPT 50: Envío de correo electrónico y trazabilidad
+  // PROMPT 50 & 52: Envío de correo electrónico y trazabilidad
   learnerEmail?: string;
   emailStatus?: 'pending' | 'sent' | 'failed' | 'not_requested';
   emailSentAt?: string;
+  emailAttemptedAt?: string;
+  emailMessageId?: string;
+  emailProvider?: string;
   emailError?: string;
 }
 

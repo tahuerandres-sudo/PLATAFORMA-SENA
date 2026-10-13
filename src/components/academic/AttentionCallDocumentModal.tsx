@@ -161,10 +161,13 @@ export const AttentionCallDocumentModal: React.FC<AttentionCallDocumentModalProp
         heightLeft -= pageHeight;
       }
 
-      const cleanDate = (call.date || '20260928').replace(/-/g, '');
-      const cleanFicha = call.fichaNumber || call.fichaId?.replace('ficha_', '') || '3405298';
-      const cleanName = (call.learnerName || 'APRENDIZ').toUpperCase().replace(/\s+/g, '_');
-      const fileName = `LLA_${cleanDate}_${cleanFicha}_${cleanName}.pdf`;
+      const cleanDate = (call.date || new Date().toISOString().split('T')[0]).replace(/-/g, '_');
+      const cleanName = (call.learnerName || 'Aprendiz')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .replace(/_+/g, '_');
+      const fileName = `Llamado_Atencion_${cleanName}_${cleanDate}.pdf`;
 
       pdf.save(fileName);
     } catch (error) {

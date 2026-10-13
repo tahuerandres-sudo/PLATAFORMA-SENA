@@ -26,6 +26,8 @@ import {
   Lock,
   Unlock,
   Edit3,
+  Download,
+  UserCheck,
 } from 'lucide-react';
 import {
   AttentionCall,
@@ -43,6 +45,9 @@ import { fichaService } from '../../services/academic/fichaService';
 import { enrollmentService } from '../../services/academic/enrollmentService';
 import { AttentionCallDocumentModal } from '../../components/academic/AttentionCallDocumentModal';
 import { EditAttentionCallModal } from '../../components/academic/EditAttentionCallModal';
+import { ApprenticeAcademicProfileModal } from '../../components/academic/ApprenticeAcademicProfileModal';
+import { downloadAttentionCallPdf } from '../../utils/attentionCallPdfDownloader';
+import { notificationService } from '../../services/academic/notificationService';
 import { Modal } from '../../components/ui/Modal';
 import { useAuth } from '../../hooks/useAuth';
 import { auth } from '../../services/firebase/config';
@@ -100,6 +105,37 @@ export const InstructorAttentionCallsView: React.FC = () => {
   // Modal de Documento Imprimible / Acta PDF
   const [documentModalOpen, setDocumentModalOpen] = useState(false);
   const [selectedCallForDoc, setSelectedCallForDoc] = useState<AttentionCall | null>(null);
+
+  // Modal para ver expediente del aprendiz
+  const [profileModalApprentice, setProfileModalApprentice] = useState<ApprenticeWithEnrollment | null>(null);
+  const [downloadingCallId, setDownloadingCallId] = useState<string | null>(null);
+  const [actionToast, setActionToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    if (actionToast) {
+      const timer = setTimeout(() => setActionToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [actionToast]);
+
+  const handleDownloadCallPdf = async (call: AttentionCall) => {
+    setDownloadingCallId(call.id);
+    try {
+      await downloadAttentionCallPdf(call);
+      setActionToast({
+        type: 'success',
+        message: 'Documento PDF generado y descargado correctamente.',
+      });
+    } catch (err: any) {
+      console.error('[InstructorAttentionCallsView] Error descargando PDF:', err);
+      setActionToast({
+        type: 'error',
+        message: 'No fue posible generar el PDF. Puedes abrir el llamado para imprimirlo.',
+      });
+    } finally {
+      setDownloadingCallId(null);
+    }
+  };
 
   // Ficha seleccionada activa
   const activeFicha = fichas.find((f) => f.id === selectedFicha);
@@ -277,6 +313,21 @@ export const InstructorAttentionCallsView: React.FC = () => {
       const savedCall = await trackingService.createAttentionCall(newCall);
       setCalls([savedCall, ...calls]);
       setSelectedCallForDoc(savedCall);
+
+      // PROMPT 53: Notificación interna en tiempo real en la plataforma institucional
+      notificationService
+        .notifyAttentionCall({
+          callId: savedCall.id,
+          userId: savedCall.userId,
+          callType: savedCall.type,
+          reason: savedCall.reason,
+        })
+        .catch((e) => console.warn('[InstructorAttentionCallsView] Error en notificación interna:', e));
+
+      setActionToast({
+        type: 'success',
+        message: `Llamado de atención radicado en Firestore exitosamente. El aprendiz recibió una notificación interna en su perfil para consultar y descargar el documento PDF.`,
+      });
 
       if (applyRestriction) {
         const newRestr: AcademicRestriction = {
@@ -703,9 +754,22 @@ export const InstructorAttentionCallsView: React.FC = () => {
                                 alt=""
                                 className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-200"
                               />
-                              <strong className="text-slate-900 block">
-                                {c.learnerName || apprentice?.displayName || 'Aprendiz'}
-                              </strong>
+                              <div>
+                                <strong className="text-slate-900 block">
+                                  {c.learnerName || apprentice?.displayName || 'Aprendiz'}
+                                </strong>
+                                {apprentice && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProfileModalApprentice(apprentice)}
+                                    className="text-[10px] text-[#00324D] hover:underline flex items-center gap-0.5 font-medium cursor-pointer"
+                                    title="Ver expediente académico del aprendiz"
+                                  >
+                                    <UserCheck className="w-2.5 h-2.5 text-[#39A900]" />
+                                    Ver aprendiz
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </td>
 
@@ -751,7 +815,7 @@ export const InstructorAttentionCallsView: React.FC = () => {
                             <span
                               className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
                                 c.status === 'JUSTIFICADO'
-                                  ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/30'
+                                    ? 'bg-[#EBF8E7] text-[#2E8500] border border-[#39A900]/30'
                                   : c.status === 'EN_REVISION'
                                   ? 'bg-blue-100 text-blue-800'
                                   : c.status === 'NOTIFICADO'
@@ -768,24 +832,38 @@ export const InstructorAttentionCallsView: React.FC = () => {
                             {c.instructorName || 'Carlos Andrés Mendoza'}
                           </td>
 
-                          {/* Acciones */}
+                          {/* Acciones Requeridas: Ver llamado, Descargar PDF, Ver aprendiz */}
                           <td className="p-3 text-right whitespace-nowrap">
                             <div className="flex items-center justify-end gap-1.5">
+                              {apprentice && (
+                                <button
+                                  type="button"
+                                  onClick={() => setProfileModalApprentice(apprentice)}
+                                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition-all shadow-2xs inline-flex items-center gap-1 cursor-pointer"
+                                  title="Acceder al expediente académico del aprendiz"
+                                >
+                                  <UserCheck className="w-3.5 h-3.5 text-slate-600" />
+                                  Ver aprendiz
+                                </button>
+                              )}
                               <button
-                                onClick={() => handleOpenEditCallModal(c)}
-                                className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[11px] font-bold transition-all shadow-2xs inline-flex items-center gap-1 cursor-pointer"
-                                title="Modificar inasistencia y plan de mejoramiento"
+                                type="button"
+                                onClick={() => openDocumentModal(c)}
+                                className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 rounded-lg text-[11px] font-bold transition-all shadow-2xs inline-flex items-center gap-1 cursor-pointer"
+                                title="Abrir vista previa del documento"
                               >
-                                <Edit3 className="w-3.5 h-3.5 text-amber-700" />
-                                Editar Plan
+                                <Eye className="w-3.5 h-3.5 text-slate-600" />
+                                Ver llamado
                               </button>
                               <button
-                                onClick={() => openDocumentModal(c)}
-                                className="px-3 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-[11px] font-bold transition-all shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
-                                title="Generar Acta Oficial con Logo SENA / PDF"
+                                type="button"
+                                onClick={() => handleDownloadCallPdf(c)}
+                                disabled={downloadingCallId === c.id}
+                                className="px-3 py-1.5 bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg text-[11px] font-bold transition-all shadow-2xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                title="Generar y descargar documento PDF en tamaño A4"
                               >
-                                <Printer className="w-3.5 h-3.5 text-[#8CE665]" />
-                                Acta Oficial
+                                <Download className={`w-3.5 h-3.5 text-[#8CE665] ${downloadingCallId === c.id ? 'animate-bounce' : ''}`} />
+                                {downloadingCallId === c.id ? 'Generando...' : 'Descargar PDF'}
                               </button>
                             </div>
                           </td>
@@ -1286,6 +1364,38 @@ export const InstructorAttentionCallsView: React.FC = () => {
           setCalls((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
           setSelectedCallForDoc(updated);
         }}
+      />
+
+      {/* Toast de confirmación de descarga u operaciones */}
+      {actionToast && (
+        <div
+          className={`fixed bottom-4 right-4 z-50 p-3.5 rounded-xl border shadow-lg text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-bottom-2 ${
+            actionToast.type === 'success'
+              ? 'bg-[#EBF8E7] border-[#39A900]/40 text-[#2E8500]'
+              : actionToast.type === 'warning'
+              ? 'bg-amber-50 border-amber-300 text-amber-800'
+              : 'bg-rose-50 border-rose-300 text-rose-800'
+          }`}
+        >
+          {actionToast.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-[#39A900]" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-amber-600" />
+          )}
+          <span>{actionToast.message}</span>
+          <button
+            onClick={() => setActionToast(null)}
+            className="ml-2 text-xs font-bold hover:underline cursor-pointer opacity-70 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Modal 6: Expediente Académico del Aprendiz (Requisito: Ver aprendiz) */}
+      <ApprenticeAcademicProfileModal
+        apprentice={profileModalApprentice}
+        onClose={() => setProfileModalApprentice(null)}
       />
     </div>
   );

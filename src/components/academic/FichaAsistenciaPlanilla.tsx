@@ -32,11 +32,13 @@ import {
   RefreshCw,
   CheckCircle2,
   ArrowUpDown,
-  ShieldAlert,
-  Mail,
+  Eye,
+  AlertCircle,
   Send,
   Info,
+  ShieldAlert,
   ShieldCheck,
+  Mail,
 } from 'lucide-react';
 import {
   Ficha,
@@ -46,10 +48,11 @@ import {
   AttentionCall,
 } from '../../types/academic';
 import { trackingService } from '../../services/academic/trackingService';
-import { attentionCallEmailClient } from '../../services/academic/attentionCallEmailClient';
 import { notificationService } from '../../services/academic/notificationService';
 import { ApprenticeAcademicProfileModal } from './ApprenticeAcademicProfileModal';
 import { EditAttentionCallModal } from './EditAttentionCallModal';
+import { AttentionCallDocumentModal } from './AttentionCallDocumentModal';
+import { downloadAttentionCallPdf } from '../../utils/attentionCallPdfDownloader';
 import { Modal } from '../ui/Modal';
 
 interface FichaAsistenciaPlanillaProps {
@@ -76,13 +79,13 @@ interface CellDetailState {
   status: StandardStatus;
   observation: string;
   arrivalTime: string;
-  // PROMPT 50: Integración de Llamados de Atención y Envío de Correo Electrónico
+  // PROMPT 50 & 52: Integración de Llamados de Atención y Envío de Correo Electrónico
   generateAttentionCall: boolean;
   attentionCallReason: string;
   attentionCallObservations: string;
   attentionCallCommitments: string;
-  sendEmailNotification: boolean;
   existingCallId?: string;
+  existingCall?: AttentionCall;
 }
 
 interface CellSelectorState {
@@ -524,6 +527,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
       arrivalTime: rec?.arrivalTime || '',
       generateAttentionCall: shouldGenerate,
       existingCallId: existingCall?.id,
+      existingCall,
       attentionCallReason: existingCall?.reason || (
         initialStatus === 'TARDE'
           ? 'Llegada tarde a la sesión de formación programada'
@@ -537,9 +541,28 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
           ? '1. Presentar por escrito compromiso pedagógico de puntualidad.\n2. Nivelar las actividades desarrolladas al inicio de la sesión.\n3. Acatar los horarios estipulados en el Reglamento del Aprendiz SENA.'
           : '1. Consultar el estado del registro en la plataforma SENA Learning Hub.\n2. Presentar descargos o justificación formal con soportes dentro de los 3 días hábiles siguientes.\n3. Nivelar las actividades y evidencias pendientes del programa de formación.'
       ),
-      sendEmailNotification: true,
     });
     setCellModalOpen(true);
+  };
+
+  // PROMPT 53: Estados y acciones para consultar y descargar el llamado de atención oficial en PDF
+  const [selectedCallForDoc, setSelectedCallForDoc] = useState<AttentionCall | null>(null);
+  const [callDocModalOpen, setCallDocModalOpen] = useState(false);
+  const [downloadingCallId, setDownloadingCallId] = useState<string | null>(null);
+
+  const handleDownloadCallPdf = async (call: AttentionCall) => {
+    setDownloadingCallId(call.id);
+    try {
+      await downloadAttentionCallPdf(call);
+      showToast('Documento PDF oficial descargado exitosamente.');
+    } catch (err: any) {
+      console.error('[FichaAsistenciaPlanilla] Error descargando PDF:', err);
+      showToast('No fue posible generar el PDF. Abriendo vista previa oficial...');
+      setSelectedCallForDoc(call);
+      setCallDocModalOpen(true);
+    } finally {
+      setDownloadingCallId(null);
+    }
   };
 
   // Guardar detalle de celda desde modal (Asistencia + Llamado de atención opcional + Correo electrónico)
@@ -555,7 +578,6 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
       attentionCallReason,
       attentionCallObservations,
       attentionCallCommitments,
-      sendEmailNotification,
       existingCallId,
     } = editingCell;
 
@@ -645,7 +667,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
           callLevel: 'PRIMER_LLAMADO',
           createdAt: nowIso,
           updatedAt: nowIso,
-          emailStatus: sendEmailNotification && apprentice.email ? 'pending' : 'not_requested',
+          emailStatus: 'not_requested',
         };
 
         let savedCall: AttentionCall;
@@ -670,38 +692,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
           })
           .catch((e) => console.warn('[FichaAsistenciaPlanilla] Error en notificación:', e));
 
-        // 3. Envío real de correo electrónico institucional mediante endpoint seguro
-        if (sendEmailNotification && apprentice.email) {
-          const emailRes = await attentionCallEmailClient.sendEmail({
-            callId: savedCall.id,
-            apprenticeName: apprentice.displayName,
-            apprenticeEmail: apprentice.email,
-            apprenticeDocument: apprentice.documentNumber,
-            fichaNumber: ficha.number,
-            programName: ficha.programName || ficha.name,
-            sessionDate: date,
-            noveltyType: noveltyType === 'TARDANZA' ? 'TARDANZA' : noveltyType === 'INASISTENCIA' ? 'INASISTENCIA' : 'OTRO',
-            reason: savedCall.reason,
-            instructorName,
-            instructorObservations: savedCall.description,
-            improvementCommitments: savedCall.improvementPlan,
-          });
-
-          const finalEmailStatus = emailRes.success ? 'sent' : 'failed';
-          await trackingService.updateAttentionCall(savedCall.id, {
-            emailStatus: finalEmailStatus,
-            emailSentAt: emailRes.sentAt || new Date().toISOString(),
-            emailError: emailRes.error,
-          });
-
-          if (emailRes.success) {
-            showToast(`Asistencia guardada, llamado radicado y correo enviado a ${apprentice.email}`);
-          } else {
-            showToast(`Asistencia guardada y llamado radicado. (${emailRes.message})`);
-          }
-        } else {
-          showToast(`Asistencia guardada y llamado de atención radicado en Firestore.`);
-        }
+        showToast('Asistencia guardada y llamado de atención radicado exitosamente. El aprendiz recibió notificación en su perfil.');
       } else {
         showToast(`Guardado: ${statusLabels[status]}`);
       }
@@ -2004,7 +1995,6 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                         return {
                           ...prev,
                           generateAttentionCall: checked,
-                          sendEmailNotification: checked ? true : prev.sendEmailNotification,
                           attentionCallReason:
                             prev.attentionCallReason ||
                             (prev.status === 'TARDE'
@@ -2043,6 +2033,59 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
               {/* Formulario desplegado si el instructor activa el llamado */}
               {editingCell.generateAttentionCall && (
                 <div className="p-3.5 bg-rose-50/50 border border-rose-200 rounded-xl space-y-3 animate-in fade-in duration-150">
+                  {/* PROMPT 53: Consulta y Descarga Oficial del Llamado de Atención */}
+                  {editingCell.existingCall && (
+                    <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2.5 shadow-2xs">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                          <FileCheck2 className="w-3.5 h-3.5 text-[#00324D]" />
+                          Expediente radicado: <span className="font-mono text-slate-600 font-semibold">{editingCell.existingCall.id}</span>
+                        </span>
+                        <span className="text-[10px] uppercase font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          {editingCell.existingCall.status || 'NOTIFICADO'}
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#39A900]" />
+                            Llamado radicado en Firestore
+                          </span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Documento oficial disponible en el expediente del aprendiz. Notificado en su perfil para consulta y descarga.
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 pt-1 sm:pt-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCallForDoc(editingCell.existingCall!);
+                              setCallDocModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 text-xs font-bold bg-white text-slate-800 border border-slate-300 rounded-lg hover:bg-slate-50 transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                            title="Ver documento oficial imprimible"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-slate-600" />
+                            <span>Ver llamado</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={downloadingCallId === editingCell.existingCall.id}
+                            onClick={() => handleDownloadCallPdf(editingCell.existingCall!)}
+                            className="px-3 py-1.5 text-xs font-bold bg-[#00324D] hover:bg-[#004A73] text-white rounded-lg transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Descargar documento PDF oficial"
+                          >
+                            <Download className={`w-3.5 h-3.5 text-[#8CE665] ${downloadingCallId === editingCell.existingCall.id ? 'animate-bounce' : ''}`} />
+                            <span>{downloadingCallId === editingCell.existingCall.id ? 'Descargando...' : 'Descargar PDF'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Motivo del llamado */}
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1">
@@ -2151,42 +2194,17 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                     </p>
                   </div>
 
-                  {/* Confirmación de envío de correo electrónico institucional */}
+                  {/* Notificación interna en la plataforma institucional */}
                   <div className="pt-2 border-t border-rose-200/80">
-                    <label className="flex items-start gap-2.5 cursor-pointer bg-white p-3 rounded-lg border border-rose-200 hover:bg-rose-50/30 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={editingCell.sendEmailNotification}
-                        onChange={(e) =>
-                          setEditingCell(
-                            (p) => p && { ...p, sendEmailNotification: e.target.checked }
-                          )
-                        }
-                        className="w-4 h-4 mt-0.5 text-[#39A900] rounded focus:ring-[#39A900] border-slate-300"
-                      />
-                      <div className="text-xs space-y-1">
-                        <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                          <Mail className="w-3.5 h-3.5 text-rose-600" />
-                          Enviar notificación al correo electrónico registrado del aprendiz
-                        </span>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[11px] text-slate-600">Dirección destino:</span>
-                          {editingCell.apprentice.email ? (
-                            <span className="font-mono text-[11px] font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 flex items-center gap-1">
-                              <ShieldCheck className="w-3 h-3 text-[#39A900]" />
-                              {editingCell.apprentice.email}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                              ⚠️ El aprendiz no tiene correo registrado en su matrícula
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-slate-400">
-                          Se despachará mediante el servicio transaccional seguro del servidor con el formato institucional SENA.
-                        </p>
-                      </div>
-                    </label>
+                    <div className="p-3 bg-white rounded-lg border border-rose-200 text-xs space-y-1">
+                      <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-[#39A900]" />
+                        Notificación interna automática en el perfil del aprendiz
+                      </span>
+                      <p className="text-[11px] text-slate-600">
+                        Al guardar, el llamado quedará registrado en Firestore y el aprendiz recibirá una notificación en tiempo real para consultar y descargar el documento PDF oficial desde su cuenta.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2217,11 +2235,7 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
                 ) : editingCell.generateAttentionCall ? (
                   <>
                     <Send className="w-3.5 h-3.5" />
-                    <span>
-                      {editingCell.sendEmailNotification
-                        ? 'Guardar y Enviar Llamado'
-                        : 'Guardar y Radicar Llamado'}
-                    </span>
+                    <span>Guardar y Radicar Llamado</span>
                   </>
                 ) : (
                   <>
@@ -2619,6 +2633,25 @@ export const FichaAsistenciaPlanilla: React.FC<FichaAsistenciaPlanillaProps> = (
           );
         })()}
       </Modal>
+
+      {/* PROMPT 53: Modal Oficial SENA para Consulta y Descarga de Llamado de Atención */}
+      <AttentionCallDocumentModal
+        isOpen={callDocModalOpen}
+        onClose={() => {
+          setCallDocModalOpen(false);
+          setSelectedCallForDoc(null);
+        }}
+        call={selectedCallForDoc}
+        onCallUpdated={(updated) => {
+          setExistingAttentionCalls((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c))
+          );
+          setSelectedCallForDoc(updated);
+          if (editingCell && editingCell.existingCall?.id === updated.id) {
+            setEditingCell((prev) => prev && { ...prev, existingCall: updated });
+          }
+        }}
+      />
     </div>
   );
 };
